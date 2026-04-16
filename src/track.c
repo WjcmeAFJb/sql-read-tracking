@@ -414,13 +414,19 @@ void sqlite3TrackCursorRead(
     return;
   }
 
-  /* Slow-path dedup: scan backwards through aRead[] over the current
+  /* Slow-path dedup: scan backwards through aRead[] within the current
   ** query, skipping if we've already logged this (table, rowid). This
   ** handles nested-loop patterns where the outer cursor is revisited
   ** after an inner scan advanced lastRead to a different table. The
-  ** scan stops as soon as we cross into an older query, so cost scales
-  ** with reads-in-current-query, not total reads. */
-  for(int i=ts->nRead-1; i>=0; i--){
+  ** window is bounded (SQLITE_TRACK_DEDUP_WINDOW entries) so that very
+  ** large linear scans stay O(1) amortised per read. Anything evicted
+  ** beyond the window may reappear as a duplicate -- a deliberate
+  ** tradeoff favouring throughput over perfect deduplication at scale. */
+  #ifndef SQLITE_TRACK_DEDUP_WINDOW
+  # define SQLITE_TRACK_DEDUP_WINDOW 256
+  #endif
+  int limit = SQLITE_TRACK_DEDUP_WINDOW;
+  for(int i=ts->nRead-1; i>=0 && limit>0; i--, limit--){
     if( ts->aRead[i].iQuery != iQuery ) break;
     if( ts->aRead[i].zTable==zName && ts->aRead[i].rowid==rowid ){
       ts->lastRead.zTable = zName;

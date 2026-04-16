@@ -355,32 +355,34 @@ Module["onRuntimeInitialized"] = function onRuntimeInitialized() {
   Database.prototype["getReadLog"] = function() {
     var n = _track_read_count(this.ptr);
     var out = new Array(n);
-    var pTbl = stackAlloc(4);
-    var pRow = stackAlloc(8);
-    var pQ = stackAlloc(4);
-    for (var i = 0; i < n; i++) {
-      var ok = _track_read_get(this.ptr, i, pTbl, pRow, pQ);
-      if (!ok) {
-        out[i] = null;
-        continue;
+    /* stackAlloc on a hot loop would leak frame space; save once, restore
+    ** at the end. */ var sp = stackSave();
+    try {
+      var pTbl = stackAlloc(4);
+      var pRow = stackAlloc(8);
+      var pQ = stackAlloc(4);
+      for (var i = 0; i < n; i++) {
+        var ok = _track_read_get(this.ptr, i, pTbl, pRow, pQ);
+        if (!ok) {
+          out[i] = null;
+          continue;
+        }
+        var tblPtr = getValue(pTbl, "*");
+        var tbl = tblPtr ? UTF8ToString(tblPtr) : null;
+        var lo = getValue(pRow, "i32");
+        var hi = getValue(pRow + 4, "i32");
+        /* Reconstruct i64. hi*2^32 + (lo>>>0) works down to the i32-min
+        ** case: hi=-1, lo<0 gives lo (sign-extended via multiplication). */ var combined = hi * 4294967296 + (lo >>> 0);
+        var rowid = Number.isSafeInteger(combined) ? combined : (BigInt(hi) << 32n) | BigInt(lo >>> 0);
+        var q = getValue(pQ, "i32");
+        out[i] = {
+          table: tbl,
+          rowid,
+          query: q
+        };
       }
-      var tblPtr = getValue(pTbl, "*");
-      var tbl = tblPtr ? UTF8ToString(tblPtr) : null;
-      var lo = getValue(pRow, "i32");
-      var hi = getValue(pRow + 4, "i32");
-      /* Reconstruct i64 -- SQLite rowids fit in 53 bits of double in
-      ** the common case; fall back to BigInt for values that don't. */ var rowid;
-      if ((hi === 0 && lo >= 0) || (hi === -1 && lo < 0)) {
-        rowid = hi * 4294967296 + (lo >>> 0);
-      } else {
-        rowid = (BigInt(hi) << 32n) | BigInt(lo >>> 0);
-      }
-      var q = getValue(pQ, "i32");
-      out[i] = {
-        table: tbl,
-        rowid,
-        query: q
-      };
+    } finally {
+      stackRestore(sp);
     }
     return out;
   };

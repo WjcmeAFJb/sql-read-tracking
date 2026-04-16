@@ -226,6 +226,31 @@ describe("Dedup behavior", () => {
   });
 });
 
+describe("Large rowids", () => {
+  test("rowids above 2^31 come back as plain numbers up to MAX_SAFE_INTEGER", () => {
+    db.exec("CREATE TABLE big(id INTEGER PRIMARY KEY, x INT)");
+    db.exec("INSERT INTO big VALUES(4294967296, 1)"); // 2^32
+    db.exec("INSERT INTO big VALUES(9007199254740991, 2)"); // 2^53-1
+    db.beginTracking();
+    db.exec("SELECT * FROM big");
+    const rids = db.getReadLog().filter(r=>r.table==="big").map(r=>r.rowid);
+    expect(rids).toContain(4294967296);
+    expect(rids).toContain(9007199254740991);
+    expect(rids.every(r => typeof r === "number")).toBe(true);
+  });
+
+  test("rowids beyond MAX_SAFE_INTEGER come back as BigInt", () => {
+    db.exec("CREATE TABLE hu(id INTEGER PRIMARY KEY)");
+    db.exec("INSERT INTO hu VALUES(9007199254740993)"); // 2^53+1
+    db.beginTracking();
+    db.exec("SELECT id FROM hu");
+    const hit = db.getReadLog().find(r=>r.table==="hu");
+    expect(typeof hit.rowid === "bigint" || typeof hit.rowid === "number").toBe(true);
+    // Either way, coercing to BigInt must match the source value.
+    expect(BigInt(hit.rowid)).toBe(9007199254740993n);
+  });
+});
+
 describe("Multiple databases isolation", () => {
   test("tracking on db1 doesn't affect db2", () => {
     const db2 = new SQL.Database();
