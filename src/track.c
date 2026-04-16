@@ -400,20 +400,36 @@ void sqlite3TrackCursorRead(
   if( !sqlite3TrackActive(ts) ) return;
   if( pgnoRoot==0 ) return;
 
-  /* Resolve the base table name first; this interns it in the name
-  ** cache so pointer comparison against subsequent lookups works. */
+  /* Resolve the base table name; interned by the name cache so pointer
+  ** comparison works. */
   const char *zName = lookupName(ts, iDb, pgnoRoot);
-  if( !zName ) return; /* ephemeral/temp btrees etc. */
+  if( !zName ) return;
 
-  /* Per-statement coalescing: if the last read was on the same
-  ** (table, rowid) pair we skip. This also merges an index-cursor
-  ** read with the immediately-following table-cursor read, since
-  ** both resolve to the same base-table name pointer. */
+  /* Fast-path dedup: if the immediately preceding read was the same
+  ** (table, rowid) pair, skip. This catches the dense OP_Column pattern
+  ** where columns of a single row are extracted one after the other. */
   if( ts->haveLastRead
       && ts->lastRead.zTable==zName
       && ts->lastRead.rowid==rowid ){
     return;
   }
+
+  /* Slow-path dedup: scan backwards through aRead[] over the current
+  ** query, skipping if we've already logged this (table, rowid). This
+  ** handles nested-loop patterns where the outer cursor is revisited
+  ** after an inner scan advanced lastRead to a different table. The
+  ** scan stops as soon as we cross into an older query, so cost scales
+  ** with reads-in-current-query, not total reads. */
+  for(int i=ts->nRead-1; i>=0; i--){
+    if( ts->aRead[i].iQuery != iQuery ) break;
+    if( ts->aRead[i].zTable==zName && ts->aRead[i].rowid==rowid ){
+      ts->lastRead.zTable = zName;
+      ts->lastRead.rowid  = rowid;
+      ts->haveLastRead    = 1;
+      return;
+    }
+  }
+
   ts->lastRead.zTable = zName;
   ts->lastRead.rowid = rowid;
   ts->haveLastRead = 1;

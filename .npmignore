@@ -1,0 +1,8 @@
+build/
+vendor/
+scripts/
+src/
+tests/
+*.log
+.gitignore
+vitest.config.mjs

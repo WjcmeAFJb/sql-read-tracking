@@ -1,0 +1,49 @@
+{
+  "name": "sqlite3-read-tracking",
+  "version": "0.1.0",
+  "description": "SQLite built to WASM with per-transaction read tracking: every (table, rowid) touched and every (SQL, rows) executed, including the cursor reads driven by mutative statements.",
+  "keywords": [
+    "sqlite",
+    "wasm",
+    "emscripten",
+    "read-tracking",
+    "audit",
+    "replication",
+    "change-data-capture"
+  ],
+  "license": "MIT",
+  "author": "Read Tracker <tracker@example.invalid>",
+  "main": "dist/sqlite3-tracked.js",
+  "types": "dist/sqlite3-tracked.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/sqlite3-tracked.d.ts",
+      "require": "./dist/sqlite3-tracked.js",
+      "import": "./dist/sqlite3-tracked.js",
+      "default": "./dist/sqlite3-tracked.js"
+    },
+    "./wasm": "./dist/sqlite3-tracked.wasm"
+  },
+  "files": [
+    "dist/sqlite3-tracked.js",
+    "dist/sqlite3-tracked.wasm",
+    "dist/sqlite3-tracked.d.ts",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "bash scripts/build-wasm.sh",
+    "build:test": "bash scripts/build-test.sh",
+    "test:native": "node build/tests.js",
+    "test:e2e": "vitest run",
+    "test:e2e:watch": "vitest",
+    "test": "bash scripts/build-test.sh && node build/tests.js && npm run build && vitest run",
+    "prepublishOnly": "bash scripts/build-wasm.sh"
+  },
+  "devDependencies": {
+    "vitest": "^1.6.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

@@ -1,0 +1,16 @@
+[
+"cwrap",
+"ccall",
+"UTF8ToString",
+"stringToUTF8",
+"lengthBytesUTF8",
+"getValue",
+"setValue",
+"stackAlloc",
+"stackRestore",
+"stackSave",
+"HEAP8",
+"HEAPU8",
+"HEAP32",
+"HEAPF64"
+]
