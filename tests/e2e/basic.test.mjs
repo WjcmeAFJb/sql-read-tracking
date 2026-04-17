@@ -10,6 +10,18 @@
 import { describe, test, expect, beforeAll, beforeEach, afterEach } from "vitest";
 import initSqliteTracked from "../../dist/sqlite3-tracked.js";
 
+/** Collapse a read log to distinct (table, rowid) pairs, dropping the
+ *  per-column granularity. Handy for tests that care about which rows
+ *  were touched, not which columns. */
+function distinctRows(log) {
+  const seen = new Map();
+  for (const r of log) {
+    const key = `${r.table}:${r.rowid}`;
+    if (!seen.has(key)) seen.set(key, { table: r.table, rowid: r.rowid, query: r.query });
+  }
+  return [...seen.values()];
+}
+
 let SQL;
 
 beforeAll(async () => {
@@ -56,9 +68,16 @@ describe("Read log: simple queries", () => {
   test("point lookup via primary key", () => {
     db.beginTracking();
     db.exec("SELECT * FROM users WHERE id=2");
-    const reads = db.getReadLog();
-    expect(reads).toHaveLength(1);
-    expect(reads[0]).toMatchObject({ table: "users", rowid: 2, query: 0 });
+    const rows = distinctRows(db.getReadLog());
+    expect(rows).toEqual([{ table: "users", rowid: 2, query: 0 }]);
+    /* Column granularity: SELECT * fetches name+age via OP_Column; the
+    ** 'rowid' event comes from OP_SeekRowid. Verify we see both. */
+    const cols = new Set(
+      db.getReadLog().filter(r => r.table === "users").map(r => r.column)
+    );
+    expect(cols.has("name")).toBe(true);
+    expect(cols.has("age")).toBe(true);
+    expect(cols.has("rowid")).toBe(true);
   });
 
   test("full table scan records every row", () => {
@@ -72,7 +91,9 @@ describe("Read log: simple queries", () => {
     db.beginTracking();
     db.exec("SELECT name FROM users WHERE age>=30");
     // SQLite without an index scans every row; the filter happens after read.
-    const rids = db.getReadLog().filter(r => r.table === "users").map(r => r.rowid);
+    const rids = distinctRows(db.getReadLog())
+      .filter(r => r.table === "users")
+      .map(r => r.rowid);
     expect(rids.sort()).toEqual([1,2,3]);
   });
 
@@ -151,7 +172,9 @@ describe("Read log: mutative statements", () => {
       CREATE TABLE audit(id INTEGER PRIMARY KEY, who TEXT);
       INSERT INTO audit(who) SELECT name FROM users WHERE age>30;
     `);
-    const rids = db.getReadLog().filter(r => r.table === "users").map(r => r.rowid);
+    const rids = distinctRows(db.getReadLog())
+      .filter(r => r.table === "users")
+      .map(r => r.rowid);
     expect(rids.sort()).toEqual([1,2,3]);
   });
 });
@@ -234,7 +257,7 @@ describe("resetTracking and begin-again semantics", () => {
     expect(db.getQueryLog()).toHaveLength(0);
     expect(db.isTracking()).toBe(true);
     db.exec("SELECT * FROM users WHERE id=2");
-    expect(db.getReadLog()).toEqual([
+    expect(distinctRows(db.getReadLog())).toEqual([
       { table: "users", rowid: 2, query: 0 },
     ]);
   });
@@ -245,7 +268,8 @@ describe("resetTracking and begin-again semantics", () => {
     db.beginTracking();
     expect(db.getReadLog()).toHaveLength(0);
     db.exec("SELECT * FROM users WHERE id=1");
-    expect(db.getReadLog().map(r => r.rowid)).toEqual([1]);
+    const rids = [...new Set(db.getReadLog().map(r => r.rowid))];
+    expect(rids).toEqual([1]);
   });
 });
 

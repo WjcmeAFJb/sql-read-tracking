@@ -120,7 +120,7 @@ Module["onRuntimeInitialized"] = function onRuntimeInitialized() {
   var _track_reset = cwrap("sqlite3_track_reset", "number", [ "number" ]);
   var _track_is_enabled = cwrap("sqlite3_track_is_enabled", "number", [ "number" ]);
   var _track_read_count = cwrap("sqlite3_track_read_count", "number", [ "number" ]);
-  var _track_read_get = cwrap("sqlite3_track_read_get", "number", [ "number", "number", "number", "number", "number" ]);
+  var _track_read_get = cwrap("sqlite3_track_read_get", "number", [ "number", "number", "number", "number", "number", "number", "number" ]);
   var _track_write_count = cwrap("sqlite3_track_write_count", "number", [ "number" ]);
   var _track_write_get = cwrap("sqlite3_track_write_get", "number", [ "number", "number", "number", "number", "number", "number" ]);
   var _track_write_cols = cwrap("sqlite3_track_write_columns", "string", [ "number", "number" ]);
@@ -366,24 +366,30 @@ Module["onRuntimeInitialized"] = function onRuntimeInitialized() {
     ** at the end. */ var sp = stackSave();
     try {
       var pTbl = stackAlloc(4);
+      var pCol = stackAlloc(4);
+      var pIdx = stackAlloc(4);
       var pRow = stackAlloc(8);
       var pQ = stackAlloc(4);
       for (var i = 0; i < n; i++) {
-        var ok = _track_read_get(this.ptr, i, pTbl, pRow, pQ);
+        var ok = _track_read_get(this.ptr, i, pTbl, pCol, pIdx, pRow, pQ);
         if (!ok) {
           out[i] = null;
           continue;
         }
         var tblPtr = getValue(pTbl, "*");
+        var colPtr = getValue(pCol, "*");
         var tbl = tblPtr ? UTF8ToString(tblPtr) : null;
+        var col = colPtr ? UTF8ToString(colPtr) : null;
+        var iCol = getValue(pIdx, "i32");
         var lo = getValue(pRow, "i32");
         var hi = getValue(pRow + 4, "i32");
-        /* Reconstruct i64. hi*2^32 + (lo>>>0) works down to the i32-min
-        ** case: hi=-1, lo<0 gives lo (sign-extended via multiplication). */ var combined = hi * 4294967296 + (lo >>> 0);
+        var combined = hi * 4294967296 + (lo >>> 0);
         var rowid = Number.isSafeInteger(combined) ? combined : (BigInt(hi) << 32n) | BigInt(lo >>> 0);
         var q = getValue(pQ, "i32");
         out[i] = {
           table: tbl,
+          column: col,
+          columnIndex: iCol,
           rowid,
           query: q
         };
@@ -4375,27 +4381,28 @@ Module["lengthBytesUTF8"] = lengthBytesUTF8;
 // End JS library exports
 // end include: postlibrary.js
 // Imports from the Wasm binary.
-var _sqlite3_free, _sqlite3_step, _sqlite3_column_int64, _sqlite3_reset, _sqlite3_exec, _sqlite3_column_int, _sqlite3_finalize, _sqlite3_prepare_v2, _sqlite3_column_text, _sqlite3_errmsg, _sqlite3_clear_bindings, _sqlite3_column_count, _sqlite3_data_count, _sqlite3_column_blob, _sqlite3_column_bytes, _sqlite3_column_double, _sqlite3_column_type, _sqlite3_column_name, _sqlite3_bind_blob, _sqlite3_bind_double, _sqlite3_bind_int, _sqlite3_bind_int64, _sqlite3_bind_null, _sqlite3_bind_text, _sqlite3_bind_parameter_count, _sqlite3_bind_parameter_name, _sqlite3_bind_parameter_index, _sqlite3_sql, _sqlite3_last_insert_rowid, _sqlite3_changes, _sqlite3_close_v2, _sqlite3_errcode, _sqlite3_open, _sqlite3_get_autocommit, _malloc, _free, _sqlite3_track_begin, _sqlite3_track_end, _sqlite3_track_reset, _sqlite3_track_is_enabled, _sqlite3_track_read_count, _sqlite3_track_read_get, _sqlite3_track_write_count, _sqlite3_track_write_get, _sqlite3_track_write_columns, _sqlite3_track_predicate_count, _sqlite3_track_predicate_get, _sqlite3_track_idxwrite_count, _sqlite3_track_idxwrite_get, _sqlite3_track_query_count, _sqlite3_track_query_sql, _sqlite3_track_query_rows_json, _sqlite3_track_dump_json, _emscripten_builtin_memalign, __emscripten_stack_restore, __emscripten_stack_alloc, _emscripten_stack_get_current, memory, __indirect_function_table, wasmMemory;
+var _sqlite3_free, _sqlite3_prepare_v2, _sqlite3_step, _sqlite3_column_int64, _sqlite3_reset, _sqlite3_exec, _sqlite3_column_int, _sqlite3_finalize, _sqlite3_column_count, _sqlite3_column_name, _sqlite3_column_text, _sqlite3_column_type, _sqlite3_errmsg, _sqlite3_clear_bindings, _sqlite3_sql, _sqlite3_data_count, _sqlite3_column_blob, _sqlite3_column_bytes, _sqlite3_column_double, _sqlite3_bind_blob, _sqlite3_bind_double, _sqlite3_bind_int, _sqlite3_bind_int64, _sqlite3_bind_null, _sqlite3_bind_text, _sqlite3_bind_parameter_count, _sqlite3_bind_parameter_name, _sqlite3_bind_parameter_index, _sqlite3_last_insert_rowid, _sqlite3_changes, _sqlite3_close_v2, _sqlite3_errcode, _sqlite3_open, _sqlite3_get_autocommit, _free, _malloc, _sqlite3_track_begin, _sqlite3_track_end, _sqlite3_track_reset, _sqlite3_track_is_enabled, _sqlite3_track_read_count, _sqlite3_track_read_get, _sqlite3_track_write_count, _sqlite3_track_write_get, _sqlite3_track_write_columns, _sqlite3_track_predicate_count, _sqlite3_track_predicate_get, _sqlite3_track_idxwrite_count, _sqlite3_track_idxwrite_get, _sqlite3_track_query_count, _sqlite3_track_query_sql, _sqlite3_track_query_rows_json, _sqlite3_track_dump_json, _emscripten_builtin_memalign, __emscripten_stack_restore, __emscripten_stack_alloc, _emscripten_stack_get_current, memory, __indirect_function_table, wasmMemory;
 
 function assignWasmExports(wasmExports) {
   _sqlite3_free = Module["_sqlite3_free"] = wasmExports["sqlite3_free"];
+  _sqlite3_prepare_v2 = Module["_sqlite3_prepare_v2"] = wasmExports["sqlite3_prepare_v2"];
   _sqlite3_step = Module["_sqlite3_step"] = wasmExports["sqlite3_step"];
   _sqlite3_column_int64 = Module["_sqlite3_column_int64"] = wasmExports["sqlite3_column_int64"];
   _sqlite3_reset = Module["_sqlite3_reset"] = wasmExports["sqlite3_reset"];
   _sqlite3_exec = Module["_sqlite3_exec"] = wasmExports["sqlite3_exec"];
   _sqlite3_column_int = Module["_sqlite3_column_int"] = wasmExports["sqlite3_column_int"];
   _sqlite3_finalize = Module["_sqlite3_finalize"] = wasmExports["sqlite3_finalize"];
-  _sqlite3_prepare_v2 = Module["_sqlite3_prepare_v2"] = wasmExports["sqlite3_prepare_v2"];
+  _sqlite3_column_count = Module["_sqlite3_column_count"] = wasmExports["sqlite3_column_count"];
+  _sqlite3_column_name = Module["_sqlite3_column_name"] = wasmExports["sqlite3_column_name"];
   _sqlite3_column_text = Module["_sqlite3_column_text"] = wasmExports["sqlite3_column_text"];
+  _sqlite3_column_type = Module["_sqlite3_column_type"] = wasmExports["sqlite3_column_type"];
   _sqlite3_errmsg = Module["_sqlite3_errmsg"] = wasmExports["sqlite3_errmsg"];
   _sqlite3_clear_bindings = Module["_sqlite3_clear_bindings"] = wasmExports["sqlite3_clear_bindings"];
-  _sqlite3_column_count = Module["_sqlite3_column_count"] = wasmExports["sqlite3_column_count"];
+  _sqlite3_sql = Module["_sqlite3_sql"] = wasmExports["sqlite3_sql"];
   _sqlite3_data_count = Module["_sqlite3_data_count"] = wasmExports["sqlite3_data_count"];
   _sqlite3_column_blob = Module["_sqlite3_column_blob"] = wasmExports["sqlite3_column_blob"];
   _sqlite3_column_bytes = Module["_sqlite3_column_bytes"] = wasmExports["sqlite3_column_bytes"];
   _sqlite3_column_double = Module["_sqlite3_column_double"] = wasmExports["sqlite3_column_double"];
-  _sqlite3_column_type = Module["_sqlite3_column_type"] = wasmExports["sqlite3_column_type"];
-  _sqlite3_column_name = Module["_sqlite3_column_name"] = wasmExports["sqlite3_column_name"];
   _sqlite3_bind_blob = Module["_sqlite3_bind_blob"] = wasmExports["sqlite3_bind_blob"];
   _sqlite3_bind_double = Module["_sqlite3_bind_double"] = wasmExports["sqlite3_bind_double"];
   _sqlite3_bind_int = Module["_sqlite3_bind_int"] = wasmExports["sqlite3_bind_int"];
@@ -4405,15 +4412,14 @@ function assignWasmExports(wasmExports) {
   _sqlite3_bind_parameter_count = Module["_sqlite3_bind_parameter_count"] = wasmExports["sqlite3_bind_parameter_count"];
   _sqlite3_bind_parameter_name = Module["_sqlite3_bind_parameter_name"] = wasmExports["sqlite3_bind_parameter_name"];
   _sqlite3_bind_parameter_index = Module["_sqlite3_bind_parameter_index"] = wasmExports["sqlite3_bind_parameter_index"];
-  _sqlite3_sql = Module["_sqlite3_sql"] = wasmExports["sqlite3_sql"];
   _sqlite3_last_insert_rowid = Module["_sqlite3_last_insert_rowid"] = wasmExports["sqlite3_last_insert_rowid"];
   _sqlite3_changes = Module["_sqlite3_changes"] = wasmExports["sqlite3_changes"];
   _sqlite3_close_v2 = Module["_sqlite3_close_v2"] = wasmExports["sqlite3_close_v2"];
   _sqlite3_errcode = Module["_sqlite3_errcode"] = wasmExports["sqlite3_errcode"];
   _sqlite3_open = Module["_sqlite3_open"] = wasmExports["sqlite3_open"];
   _sqlite3_get_autocommit = Module["_sqlite3_get_autocommit"] = wasmExports["sqlite3_get_autocommit"];
-  _malloc = Module["_malloc"] = wasmExports["malloc"];
   _free = Module["_free"] = wasmExports["free"];
+  _malloc = Module["_malloc"] = wasmExports["malloc"];
   _sqlite3_track_begin = Module["_sqlite3_track_begin"] = wasmExports["sqlite3_track_begin"];
   _sqlite3_track_end = Module["_sqlite3_track_end"] = wasmExports["sqlite3_track_end"];
   _sqlite3_track_reset = Module["_sqlite3_track_reset"] = wasmExports["sqlite3_track_reset"];

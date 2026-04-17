@@ -105,7 +105,7 @@ Module["onRuntimeInitialized"] = function onRuntimeInitialized(){
   var _track_read_count   = cwrap("sqlite3_track_read_count", "number",
                                   ["number"]);
   var _track_read_get     = cwrap("sqlite3_track_read_get", "number",
-    ["number", "number", "number", "number", "number"]);
+    ["number", "number", "number", "number", "number", "number", "number"]);
   var _track_write_count  = cwrap("sqlite3_track_write_count", "number",
                                   ["number"]);
   var _track_write_get    = cwrap("sqlite3_track_write_get", "number",
@@ -377,23 +377,27 @@ Module["onRuntimeInitialized"] = function onRuntimeInitialized(){
     var sp = stackSave();
     try {
       var pTbl = stackAlloc(4);
+      var pCol = stackAlloc(4);
+      var pIdx = stackAlloc(4);
       var pRow = stackAlloc(8);
       var pQ   = stackAlloc(4);
       for(var i=0;i<n;i++){
-        var ok = _track_read_get(this.ptr, i, pTbl, pRow, pQ);
+        var ok = _track_read_get(this.ptr, i, pTbl, pCol, pIdx, pRow, pQ);
         if( !ok ){ out[i] = null; continue; }
         var tblPtr = getValue(pTbl, "*");
+        var colPtr = getValue(pCol, "*");
         var tbl = tblPtr ? UTF8ToString(tblPtr) : null;
+        var col = colPtr ? UTF8ToString(colPtr) : null;
+        var iCol = getValue(pIdx, "i32");
         var lo = getValue(pRow, "i32");
         var hi = getValue(pRow+4, "i32");
-        /* Reconstruct i64. hi*2^32 + (lo>>>0) works down to the i32-min
-        ** case: hi=-1, lo<0 gives lo (sign-extended via multiplication). */
         var combined = hi * 4294967296 + (lo >>> 0);
         var rowid = Number.isSafeInteger(combined)
           ? combined
           : (BigInt(hi) << 32n) | BigInt(lo >>> 0);
         var q = getValue(pQ, "i32");
-        out[i] = {table: tbl, rowid: rowid, query: q};
+        out[i] = {table: tbl, column: col, columnIndex: iCol,
+                  rowid: rowid, query: q};
       }
     } finally {
       stackRestore(sp);

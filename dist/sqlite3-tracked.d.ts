@@ -28,6 +28,12 @@ export interface ExecResult {
 export interface ReadLogEntry {
   /** Base-table name (index reads are surfaced as the index's owning table). */
   table: string;
+  /** Column name touched: "rowid" for rowid/existence probes, or the
+   *  schema column name for OP_Column extractions. Stable for the
+   *  lifetime of the schema. */
+  column: string;
+  /** 0-based column index into the table, or -1 for "rowid" events. */
+  columnIndex: number;
   /** Integer primary key of the row touched. */
   rowid: number | bigint;
   /** Index into getQueryLog() identifying the originating statement. */

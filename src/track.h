@@ -33,10 +33,19 @@ int sqlite3_track_reset(sqlite3 *db);
 int sqlite3_track_read_count(sqlite3 *db);
 
 /* Retrieve the i-th read. Returns 1 on success, 0 if i is out of range.
-** The returned string is owned by the tracker; do not free. */
+** The returned strings are owned by the tracker; do not free.
+**
+** *pzColumn is one of:
+**   "rowid"   -- the event came from an op that only touched the rowid
+**                (OP_Rowid, OP_SeekRowid, OP_NotExists, OP_Found/NotFound,
+**                 OP_IdxRowid, OP_DeferredSeek). *piCol is -1.
+**   column    -- a specific table column was extracted (OP_Column).
+**                *piCol is the 0-based column index. */
 int sqlite3_track_read_get(
   sqlite3 *db, int i,
   const char **pzTable,
+  const char **pzColumn,
+  int *piCol,
   sqlite3_int64 *pRowid,
   int *pQueryIndex
 );
@@ -162,9 +171,9 @@ int sqlite3TrackBeginQuery(TrackState *ts, const char *zSql);
 /* Called from OP_ResultRow. aMem points to p->nResColumn Mem values. */
 void sqlite3TrackResultRow(TrackState *ts, int iQuery, void *aMem, int nMem);
 
-/* Called from row-access opcodes (OP_Rowid, OP_Column, OP_IdxRowid,
-** OP_SeekRowid, OP_NotExists, OP_Found/OP_NotFound for indexes, etc.).
-** db is used to resolve pgnoRoot -> table name (cached). */
+/* Called from row-access opcodes. iCol is the table column index for
+** OP_Column, or -1 for rowid/existence probes (OP_Rowid, OP_SeekRowid,
+** OP_NotExists, OP_Found/OP_NotFound, OP_IdxRowid, OP_DeferredSeek). */
 void sqlite3TrackCursorRead(
   TrackState *ts,
   int iQuery,
@@ -172,7 +181,8 @@ void sqlite3TrackCursorRead(
   int iDb,
   unsigned int pgnoRoot,
   sqlite3_int64 rowid,
-  int isIndex
+  int isIndex,
+  int iCol
 );
 
 /* Called from write opcodes. `op` is one of SQLITE_TRACK_OP_INSERT,

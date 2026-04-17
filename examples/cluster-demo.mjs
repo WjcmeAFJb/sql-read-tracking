@@ -111,54 +111,92 @@ function keyInRange(writeKey, range) {
 
 /* --------------------------- conflicts ---------------------------- */
 
-function conflictReasons(a, b) {
-  const reasons = [];
-
-  /* Pre-compute the set of (table, rowid) pairs where both txs do
-   * column-disjoint UPDATEs. Those pairs commute -- physically both
-   * rewrite the whole row, so the row-level tracker flags rw+ww, but
-   * semantically each side preserves the other's columns on rewrite
-   * and the final state is the same regardless of order. We suppress
-   * edges on those rows so the cluster graph doesn't merge them. The
-   * suppression assumes SET expressions don't cross-reference (i.e.
-   * neither side's SET formula reads a column the other side writes);
-   * that is the common case for independent column updates. */
-  const commuting = new Set();
-  for (const wa of a.writes) {
-    if (wa.op !== "update" || !wa.columns) continue;
-    for (const wb of b.writes) {
-      if (wb.op !== "update" || !wb.columns) continue;
-      if (wa.table !== wb.table || wa.rowid !== wb.rowid) continue;
-      const sa = new Set(wa.columns);
-      if (!wb.columns.some(c => sa.has(c))) {
-        commuting.add(`${wa.table}:${wa.rowid}`);
-      }
+/**
+ * Filter a tx's read log to just the LOGICAL reads -- i.e. reads that
+ * the SQL semantics actually depend on, not the rewrite-preservation
+ * reads that SQLite emits for UPDATE. For each UPDATE on (table, rowid)
+ * with write mask W, reads of (table, rowid, col) where col ∉ W AND
+ * col != "rowid" are preservation reads and get dropped.
+ *
+ * Left alone:
+ *   - rowid reads (OP_SeekRowid: drove the WHERE clause)
+ *   - reads of columns IN the write mask (the SET expression used them,
+ *     e.g. `SET age=age+1`)
+ *   - reads on rows / tables not being UPDATEd by this tx
+ */
+function logicalReads(tx) {
+  if (!tx.writes.some(w => w.op === "update" && w.columns)) return tx.reads;
+  const maskByRow = new Map(); // "table:rowid" -> Set(cols)
+  for (const w of tx.writes) {
+    if (w.op === "update" && w.columns) {
+      maskByRow.set(`${w.table}:${w.rowid}`, new Set(w.columns));
     }
   }
-  const isCommuting = (table, rowid) => commuting.has(`${table}:${rowid}`);
+  return tx.reads.filter(r => {
+    const mask = maskByRow.get(`${r.table}:${r.rowid}`);
+    if (!mask) return true; // not an UPDATE target
+    if (r.column === "rowid") return true; // WHERE probe
+    return mask.has(r.column); // in SET => used by SET expression
+  });
+}
 
-  const pointRW = (reader, writer) => {
+function conflictReasons(a, b) {
+  const reasons = [];
+  const aReads = logicalReads(a);
+  const bReads = logicalReads(b);
+
+  /* Point rw with column granularity. The rules:
+   *
+   *   writer = truncate      -> any read on the table is an rw edge
+   *   writer = delete        -> any read on (table, rowid) is an rw edge
+   *   writer = insert        -> any read on (table, rowid) is an rw edge
+   *                             (happens with INSERT OR REPLACE and
+   *                             explicit-rowid INSERTs)
+   *   writer = update + cols -> only reads on (table, rowid, col) where
+   *                             col ∈ cols are rw edges. Column-level
+   *                             commutativity is the main point of
+   *                             reading the write column mask.
+   *   writer = update no cols -> conservative: same as delete
+   *
+   * A read of column "rowid" means the reader probed for the row's
+   * existence; it conflicts with delete/truncate but not with an
+   * update that leaves the rowid unchanged, UNLESS the UPDATE mask
+   * explicitly contains "rowid" (rare: `UPDATE t SET rowid=...`). */
+  const pointRW = (reader, readerLog, writer) => {
     for (const w of writer.writes) {
       if (w.op === "truncate") {
-        const hit = reader.reads.find(r => r.table === w.table);
+        const hit = readerLog.find(r => r.table === w.table);
         if (hit) reasons.push(
-          `rw: ${reader.label} read ${hit.table}:${hit.rowid}; ` +
+          `rw: ${reader.label} read ${hit.table}:${hit.rowid}.${hit.column}; ` +
           `${writer.label} truncated ${w.table}`
         );
-      } else {
-        if (isCommuting(w.table, w.rowid)) continue;
-        const hit = reader.reads.find(
-          r => r.table === w.table && r.rowid === w.rowid
-        );
-        if (hit) reasons.push(
-          `rw: ${reader.label} read ${hit.table}:${hit.rowid}; ` +
-          `${writer.label} ${w.op} ${w.table}:${w.rowid}`
-        );
+        continue;
+      }
+      for (const r of readerLog) {
+        if (r.table !== w.table || r.rowid !== w.rowid) continue;
+
+        let conflicts = true;
+        if (w.op === "update" && w.columns) {
+          const writeCols = new Set(w.columns);
+          if (r.column === "rowid") {
+            conflicts = writeCols.has("rowid");
+          } else {
+            conflicts = writeCols.has(r.column);
+          }
+        }
+        if (conflicts) {
+          reasons.push(
+            `rw: ${reader.label} read ${r.table}:${r.rowid}.${r.column}; ` +
+            `${writer.label} ${w.op} ${w.table}:${w.rowid}` +
+            (w.columns ? ` cols=[${w.columns.join(",")}]` : "")
+          );
+          break;
+        }
       }
     }
   };
-  pointRW(a, b);
-  pointRW(b, a);
+  pointRW(a, aReads, b);
+  pointRW(b, bReads, a);
 
   /* ww conflict: same table AND same rowid AND overlapping column sets.
    * Two UPDATEs on the same row that touch disjoint columns commute,

@@ -24,6 +24,9 @@ extern const char *sqlite3TrackTableNameByRootPage(
 extern const char *sqlite3TrackIndexNameByRootPage(
   sqlite3 *db, int iDb, unsigned int pgnoRoot
 );
+extern const char *sqlite3TrackColumnNameByRootPage(
+  sqlite3 *db, int iDb, unsigned int pgnoRoot, int iCol
+);
 
 /* Encode a VDBE register array (Mem[nMem]) as a JSON array string.
 ** Caller owns the returned buffer and must free it with free(). NULL on
@@ -34,7 +37,9 @@ extern char *sqlite3TrackEncodeRowAsJson(void *aMem, int nMem);
 
 typedef struct TrackRead {
   const char *zTable;       /* pointer into name cache; not owned here */
+  const char *zColumn;      /* "rowid" or schema-owned column name */
   sqlite3_int64 rowid;
+  int iCol;                 /* -1 for rowid; >=0 for a table column */
   int iQuery;               /* index into TrackState.aQuery */
   int isIndex;              /* 1 if the read came from an index cursor */
 } TrackRead;
@@ -114,13 +119,15 @@ struct TrackState {
   int nNameCache;
   int nNameCacheAlloc;
 
-  /* Per-statement dedup buffer: recently-seen (resolvedTableName,rowid)
-  ** to avoid flooding the log when a single row is read many times. We
-  ** key on the *resolved name* pointer (names are interned by the name
-  ** cache, so two cursors on the same base table share the same pointer
-  ** regardless of whether they came through an index or the table). */
+  /* Per-statement dedup buffer. Keyed on (zTable, rowid, zColumn) so
+  ** column-level granularity is preserved: reading cols A and B of the
+  ** same row produces two entries, but reading col A twice coalesces.
+  ** Names are interned (zTable into the schema, zColumn either a
+  ** schema-owned column name or the static "rowid"), so pointer
+  ** equality works. */
   struct {
     const char *zTable;
+    const char *zColumn;
     sqlite3_int64 rowid;
   } lastRead;
   int haveLastRead;
@@ -329,11 +336,17 @@ int sqlite3_track_read_count(sqlite3 *db){
 
 int sqlite3_track_read_get(
   sqlite3 *db, int i,
-  const char **pzTable, sqlite3_int64 *pRowid, int *pQueryIndex
+  const char **pzTable,
+  const char **pzColumn,
+  int *piCol,
+  sqlite3_int64 *pRowid,
+  int *pQueryIndex
 ){
   TrackState *ts = sqlite3TrackOfDb(db);
   if( !ts || i<0 || i>=ts->nRead ) return 0;
   if( pzTable )    *pzTable = ts->aRead[i].zTable;
+  if( pzColumn )   *pzColumn = ts->aRead[i].zColumn;
+  if( piCol )      *piCol = ts->aRead[i].iCol;
   if( pRowid )     *pRowid = ts->aRead[i].rowid;
   if( pQueryIndex) *pQueryIndex = ts->aRead[i].iQuery;
   return 1;
@@ -438,6 +451,8 @@ const char *sqlite3_track_dump_json(sqlite3 *db){
     if( i>0 && appendChar(&buf,&n,&nAlloc, ',') ) goto oom;
     if( appendStr(&buf,&n,&nAlloc, "{\"table\":", -1) ) goto oom;
     if( appendJsonString(&buf,&n,&nAlloc, ts->aRead[i].zTable, -1) ) goto oom;
+    if( appendStr(&buf,&n,&nAlloc, ",\"column\":", -1) ) goto oom;
+    if( appendJsonString(&buf,&n,&nAlloc, ts->aRead[i].zColumn, -1) ) goto oom;
     if( appendStr(&buf,&n,&nAlloc, ",\"rowid\":", -1) ) goto oom;
     if( appendI64(&buf,&n,&nAlloc, ts->aRead[i].rowid) ) goto oom;
     if( appendStr(&buf,&n,&nAlloc, ",\"query\":", -1) ) goto oom;
@@ -537,50 +552,52 @@ void sqlite3TrackCursorRead(
   int iDb,
   unsigned int pgnoRoot,
   sqlite3_int64 rowid,
-  int isIndex
+  int isIndex,
+  int iCol
 ){
   if( !sqlite3TrackActive(ts) ) return;
   if( pgnoRoot==0 ) return;
 
-  /* Resolve the base table name; interned by the name cache so pointer
-  ** comparison works. */
   const char *zName = lookupName(ts, iDb, pgnoRoot);
   if( !zName ) return;
 
-  /* Fast-path dedup: if the immediately preceding read was the same
-  ** (table, rowid) pair, skip. This catches the dense OP_Column pattern
-  ** where columns of a single row are extracted one after the other. */
+  /* Resolve column name. For iCol==-1 ("rowid") and iCol>=0 the
+  ** resolver returns a pointer into the schema (or the static string
+  ** "rowid"); both are stable for the lifetime of the schema. */
+  const char *zColumn = sqlite3TrackColumnNameByRootPage(
+                          ts->db, iDb, pgnoRoot, iCol);
+  if( !zColumn ) zColumn = "?";
+
+  /* Fast-path dedup on the full (table, rowid, column) triple. */
   if( ts->haveLastRead
       && ts->lastRead.zTable==zName
+      && ts->lastRead.zColumn==zColumn
       && ts->lastRead.rowid==rowid ){
     return;
   }
 
-  /* Slow-path dedup: scan backwards through aRead[] within the current
-  ** query, skipping if we've already logged this (table, rowid). This
-  ** handles nested-loop patterns where the outer cursor is revisited
-  ** after an inner scan advanced lastRead to a different table. The
-  ** window is bounded (SQLITE_TRACK_DEDUP_WINDOW entries) so that very
-  ** large linear scans stay O(1) amortised per read. Anything evicted
-  ** beyond the window may reappear as a duplicate -- a deliberate
-  ** tradeoff favouring throughput over perfect deduplication at scale. */
+  /* Slow-path dedup over the current query's window. */
   #ifndef SQLITE_TRACK_DEDUP_WINDOW
   # define SQLITE_TRACK_DEDUP_WINDOW 256
   #endif
   int limit = SQLITE_TRACK_DEDUP_WINDOW;
   for(int i=ts->nRead-1; i>=0 && limit>0; i--, limit--){
     if( ts->aRead[i].iQuery != iQuery ) break;
-    if( ts->aRead[i].zTable==zName && ts->aRead[i].rowid==rowid ){
-      ts->lastRead.zTable = zName;
-      ts->lastRead.rowid  = rowid;
-      ts->haveLastRead    = 1;
+    if( ts->aRead[i].zTable==zName
+        && ts->aRead[i].zColumn==zColumn
+        && ts->aRead[i].rowid==rowid ){
+      ts->lastRead.zTable  = zName;
+      ts->lastRead.zColumn = zColumn;
+      ts->lastRead.rowid   = rowid;
+      ts->haveLastRead     = 1;
       return;
     }
   }
 
-  ts->lastRead.zTable = zName;
-  ts->lastRead.rowid = rowid;
-  ts->haveLastRead = 1;
+  ts->lastRead.zTable  = zName;
+  ts->lastRead.zColumn = zColumn;
+  ts->lastRead.rowid   = rowid;
+  ts->haveLastRead     = 1;
 
   if( ts->nRead==ts->nReadAlloc ){
     int n = ts->nReadAlloc ? ts->nReadAlloc*2 : 16;
@@ -591,7 +608,9 @@ void sqlite3TrackCursorRead(
   }
   TrackRead *r = &ts->aRead[ts->nRead++];
   r->zTable  = zName;
+  r->zColumn = zColumn;
   r->rowid   = rowid;
+  r->iCol    = iCol;
   r->iQuery  = iQuery;
   r->isIndex = isIndex ? 1 : 0;
 }

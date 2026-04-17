@@ -68,9 +68,25 @@ static void exec_ok(sqlite3 *db, const char *sql){
 static int has_read(sqlite3 *db, const char *tbl, sqlite3_int64 rid){
   int n = sqlite3_track_read_count(db);
   for(int i=0;i<n;i++){
-    const char *t = 0; sqlite3_int64 r=0; int q=0;
-    sqlite3_track_read_get(db, i, &t, &r, &q);
+    const char *t = 0, *c = 0;
+    int iCol = 0, q = 0;
+    sqlite3_int64 r = 0;
+    sqlite3_track_read_get(db, i, &t, &c, &iCol, &r, &q);
     if( t && strcmp(t,tbl)==0 && r==rid ) return 1;
+  }
+  return 0;
+}
+
+static int has_column_read(
+  sqlite3 *db, const char *tbl, sqlite3_int64 rid, const char *col
+){
+  int n = sqlite3_track_read_count(db);
+  for(int i=0;i<n;i++){
+    const char *t = 0, *c = 0;
+    int iCol = 0, q = 0;
+    sqlite3_int64 r = 0;
+    sqlite3_track_read_get(db, i, &t, &c, &iCol, &r, &q);
+    if( t && c && strcmp(t,tbl)==0 && r==rid && strcmp(c,col)==0 ) return 1;
   }
   return 0;
 }
@@ -100,11 +116,30 @@ static int count_reads(sqlite3 *db, const char *tbl, int iQ){
   int n = sqlite3_track_read_count(db);
   int c = 0;
   for(int i=0;i<n;i++){
-    const char *t = 0; sqlite3_int64 r=0; int q=0;
-    sqlite3_track_read_get(db, i, &t, &r, &q);
+    const char *t = 0, *col = 0;
+    int iCol = 0, q = 0;
+    sqlite3_int64 r = 0;
+    sqlite3_track_read_get(db, i, &t, &col, &iCol, &r, &q);
     if( t && strcmp(t,tbl)==0 && q==iQ ) c++;
   }
   return c;
+}
+
+/* Count distinct rowids read for a table. Collapses per-column duplicates. */
+static int count_rows(sqlite3 *db, const char *tbl){
+  int n = sqlite3_track_read_count(db);
+  sqlite3_int64 seen[128]; int nSeen = 0;
+  for(int i=0;i<n;i++){
+    const char *t = 0, *col = 0;
+    int iCol = 0, q = 0;
+    sqlite3_int64 r = 0;
+    sqlite3_track_read_get(db, i, &t, &col, &iCol, &r, &q);
+    if( !t || strcmp(t,tbl)!=0 ) continue;
+    int dup = 0;
+    for(int j=0;j<nSeen;j++) if( seen[j]==r ){ dup=1; break; }
+    if( !dup && nSeen<128 ) seen[nSeen++] = r;
+  }
+  return nSeen;
 }
 
 /* --- tests ----------------------------------------------------------- */
@@ -244,7 +279,10 @@ static void test_reset_between_runs(void){
   sqlite3 *db = open_seeded();
   sqlite3_track_begin(db);
   exec_ok(db, "SELECT * FROM users WHERE id=1;");
-  EQ_I(sqlite3_track_read_count(db), 1, "after first run");
+  /* SELECT * on a 3-column table with PK lookup logs the rowid probe
+  ** plus OP_Column for each fetched column; we just care that 1 *row*
+  ** was read. */
+  EQ_I(count_rows(db, "users"), 1, "exactly one row after first run");
 
   sqlite3_track_begin(db); /* re-begin resets */
   EQ_I(sqlite3_track_read_count(db), 0, "after re-begin");
@@ -312,8 +350,28 @@ static void test_index_lookup_attribution(void){
   OK(has_read(db, "posts", 10), "posts.10 via index");
   OK(has_read(db, "posts", 11), "posts.11 via index");
   /* The base-table resolution means callers see "posts", not
-  ** "posts_user" (the index name). */
-  EQ_I(count_reads(db, "posts", 0), 2, "two reads on posts via index");
+  ** "posts_user" (the index name). With column granularity we expect
+  ** one "rowid" event (from OP_DeferredSeek via the index) and one
+  ** "body" event (from OP_Column on the table cursor) per matching
+  ** row -- four entries for two rows. Two *rows* are read. */
+  EQ_I(count_rows(db, "posts"), 2, "two distinct posts rows read");
+  g_pass++;
+  sqlite3_close(db);
+}
+
+static void test_column_level_reads(void){
+  /* SELECT of one column should log a read with column=name (not
+  ** "rowid") for each row scanned. */
+  sqlite3 *db = open_seeded();
+  sqlite3_track_begin(db);
+  exec_ok(db, "SELECT name FROM users;");
+  sqlite3_track_end(db);
+
+  OK(has_column_read(db, "users", 1, "name"), "users.1.name");
+  OK(has_column_read(db, "users", 2, "name"), "users.2.name");
+  OK(has_column_read(db, "users", 3, "name"), "users.3.name");
+  OK(!has_column_read(db, "users", 1, "age"),
+     "age not read (not in SELECT list)");
   g_pass++;
   sqlite3_close(db);
 }
@@ -452,11 +510,12 @@ static void test_rw_graph_happy_path(void){
   sqlite3_track_begin(db);
   exec_ok(db, "SELECT name FROM users WHERE id=2;");
   sqlite3_track_end(db);
-  int t1_reads = sqlite3_track_read_count(db);
-  OK(t1_reads == 1, "T1 read exactly one row");
-  /* Snapshot T1 state */
-  sqlite3_int64 t1_rowid=0; const char *t1_tbl=0;
-  sqlite3_track_read_get(db, 0, &t1_tbl, &t1_rowid, 0);
+  OK(count_rows(db, "users") == 1, "T1 read exactly one row");
+  /* Snapshot T1 state -- take the first read's (table, rowid). */
+  sqlite3_int64 t1_rowid = 0; const char *t1_tbl = 0, *t1_col = 0;
+  int t1_icol = 0, t1_q = 0;
+  sqlite3_track_read_get(db, 0, &t1_tbl, &t1_col, &t1_icol,
+                         &t1_rowid, &t1_q);
 
   /* Simulated T2: write users.2 (emulates DELETE by a concurrent txn) */
   sqlite3_track_begin(db); /* resets */
@@ -498,6 +557,7 @@ int main(void){
   RUN(test_dump_json_shape);
   RUN(test_string_and_null_values);
   RUN(test_index_lookup_attribution);
+  RUN(test_column_level_reads);
 
   RUN(test_insert_tracked);
   RUN(test_delete_tracked);

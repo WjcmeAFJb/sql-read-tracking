@@ -6,6 +6,20 @@
 import { describe, test, expect, beforeAll, beforeEach, afterEach } from "vitest";
 import initSqliteTracked from "../../dist/sqlite3-tracked.js";
 
+/* Collapse to distinct (table, rowid) pairs -- tests here usually care
+ * about which rows were visited, not which specific columns. */
+function distinctRows(log) {
+  const seen = new Map();
+  for (const r of log) {
+    const key = `${r.table}:${r.rowid}`;
+    if (!seen.has(key)) seen.set(key, { table: r.table, rowid: r.rowid });
+  }
+  return [...seen.values()];
+}
+function uniqRowids(log, table) {
+  return [...new Set(log.filter(r => r.table === table).map(r => r.rowid))];
+}
+
 let SQL;
 beforeAll(async () => { SQL = await initSqliteTracked(); });
 
@@ -74,8 +88,8 @@ describe("Aggregates and grouping", () => {
     db.beginTracking();
     const r = db.exec("SELECT user_id, SUM(amount) FROM orders GROUP BY user_id");
     expect(r[0].values.length).toBe(4);
-    const rids = db.getReadLog().filter(x=>x.table==="orders").map(x=>x.rowid);
-    expect(rids.sort()).toEqual([100,101,102,103,104,105]);
+    expect(uniqRowids(db.getReadLog(), "orders").sort((a,b)=>a-b))
+      .toEqual([100,101,102,103,104,105]);
   });
 
   test("HAVING narrows output but input rows are still tracked", () => {
@@ -85,8 +99,8 @@ describe("Aggregates and grouping", () => {
       GROUP BY user_id HAVING SUM(amount) > 30
     `);
     // All 6 orders rows were scanned to compute the aggregate.
-    const rids = db.getReadLog().filter(x=>x.table==="orders").map(x=>x.rowid);
-    expect(rids.sort()).toEqual([100,101,102,103,104,105]);
+    expect(uniqRowids(db.getReadLog(), "orders").sort((a,b)=>a-b))
+      .toEqual([100,101,102,103,104,105]);
   });
 });
 
@@ -97,12 +111,9 @@ describe("Correlated subqueries and EXISTS", () => {
       SELECT u.name FROM users u
       WHERE EXISTS (SELECT 1 FROM orders o WHERE o.user_id=u.id AND o.amount>20)
     `);
-    const log = db.getReadLog();
-    const users = log.filter(r=>r.table==="users").map(r=>r.rowid);
-    expect(users.sort()).toEqual([1,2,3,4]);
-    const orders = log.filter(r=>r.table==="orders").map(r=>r.rowid);
-    // Each user was probed against orders; matches drive the tracking.
-    expect(orders.length).toBeGreaterThan(0);
+    expect(uniqRowids(db.getReadLog(), "users").sort((a,b)=>a-b))
+      .toEqual([1,2,3,4]);
+    expect(uniqRowids(db.getReadLog(), "orders").length).toBeGreaterThan(0);
   });
 
   test("scalar subquery in SELECT list is tracked", () => {
@@ -136,8 +147,8 @@ describe("Recursive CTEs", () => {
     `);
     expect(res[0].values.map(r=>r[0])).toEqual([1,2,3,4,5]);
     // Every node row should show up in the read log.
-    const rids = db.getReadLog().filter(r=>r.table==="nodes").map(r=>r.rowid);
-    expect(rids.sort()).toEqual([1,2,3,4,5]);
+    expect(uniqRowids(db.getReadLog(), "nodes").sort((a,b)=>a-b))
+      .toEqual([1,2,3,4,5]);
   });
 });
 
@@ -165,8 +176,8 @@ describe("Views", () => {
     db.exec("CREATE VIEW adult_users AS SELECT * FROM users WHERE age>=30");
     db.beginTracking();
     db.exec("SELECT name FROM adult_users WHERE age<40");
-    const rids = db.getReadLog().filter(r=>r.table==="users").map(r=>r.rowid).sort();
-    expect(rids).toEqual([1,2,3,4]);
+    expect(uniqRowids(db.getReadLog(), "users").sort((a,b)=>a-b))
+      .toEqual([1,2,3,4]);
   });
 });
 
@@ -195,34 +206,42 @@ describe("Blob values", () => {
     const back = db.exec("SELECT data FROM blobs WHERE id=1")[0].values[0][0];
     expect(back instanceof Uint8Array).toBe(true);
     expect(Array.from(back)).toEqual(Array.from(payload));
-    // Tracking worked too
-    expect(db.getReadLog()).toEqual([
-      { table: "blobs", rowid: 1, query: 0 },
+    // Tracking worked too: one distinct row, with data column read.
+    expect(distinctRows(db.getReadLog())).toEqual([
+      { table: "blobs", rowid: 1 },
     ]);
+    expect(db.getReadLog().some(r => r.column === "data")).toBe(true);
   });
 });
 
 describe("Dedup behavior", () => {
-  test("multi-column SELECT of same row emits ONE read", () => {
+  test("multi-column SELECT of same row emits one event PER COLUMN", () => {
+    /* Column-level granularity: SELECT id, name, age produces three
+    ** OP_Column calls per row, plus an OP_SeekRowid (rowid) event.
+    ** Each (rowid, column) pair dedupes to itself within a statement. */
     db.beginTracking();
     db.exec("SELECT id, name, age FROM users WHERE id=1");
     const forId1 = db.getReadLog().filter(r=>r.table==="users" && r.rowid===1);
-    expect(forId1).toHaveLength(1);
+    const cols = new Set(forId1.map(r => r.column));
+    expect(cols.has("rowid")).toBe(true);
+    expect(cols.has("name")).toBe(true);
+    expect(cols.has("age")).toBe(true);
+    /* (`id` may or may not show up depending on whether INTEGER PRIMARY
+    ** KEY lowers to OP_Rowid or OP_Column; either way there is exactly
+    ** ONE distinct row, i.e. we have NOT re-read the row.) */
+    expect(distinctRows(forId1)).toHaveLength(1);
   });
 
-  test("same row accessed via index and table yields ONE entry", () => {
+  test("same row accessed via index and table collapses to ONE distinct row", () => {
     db.beginTracking();
     db.exec(`
       SELECT u.name, o.amount FROM users u, orders o
       WHERE o.user_id=u.id AND u.id=1
     `);
-    /* The join probes posts_user index, then seeks to orders rows, then
-    ** reads columns. Each unique (table, rowid) should appear once. */
-    const users = db.getReadLog().filter(r=>r.table==="users" && r.rowid===1);
-    expect(users).toHaveLength(1);
-    const ordersReads = db.getReadLog().filter(r=>r.table==="orders");
-    // alice has 2 orders (100, 101).
-    expect(ordersReads.map(r=>r.rowid).sort()).toEqual([100, 101]);
+    const users = distinctRows(db.getReadLog().filter(r=>r.table==="users"));
+    expect(users).toEqual([{ table: "users", rowid: 1 }]);
+    const orderRowids = uniqRowids(db.getReadLog(), "orders").sort((a,b)=>a-b);
+    expect(orderRowids).toEqual([100, 101]);
   });
 });
 
