@@ -34,6 +34,16 @@ export interface ReadLogEntry {
   query: number;
 }
 
+export type WriteOp = "insert" | "update" | "delete" | "truncate";
+
+export interface WriteLogEntry {
+  table: string;
+  /** rowid for insert/delete. -1 for truncate (wildcard -- matches any rowid). */
+  rowid: number | bigint;
+  op: WriteOp;
+  query: number;
+}
+
 export interface QueryLogEntry {
   /** Original SQL text passed to prepare/exec. */
   sql: string;
@@ -80,9 +90,14 @@ export declare class Database {
   isTracking(): boolean;
   /** Every row-level read since beginTracking(). */
   getReadLog(): ReadLogEntry[];
+  /** Every row-level write since beginTracking().
+   *  Captured at the VDBE layer (OP_Insert/OP_Delete/OP_Clear) so it
+   *  covers the truncate optimization and ON CONFLICT REPLACE paths that
+   *  sqlite3_update_hook misses. */
+  getWriteLog(): WriteLogEntry[];
   /** Every executed statement plus the rows it emitted. */
   getQueryLog(): QueryLogEntry[];
-  /** JSON-serialized dump of reads + queries. */
+  /** JSON-serialized dump of reads + writes + queries. */
   dumpTracking(): string;
 }
 

@@ -36,6 +36,13 @@ typedef struct TrackRead {
   int isIndex;              /* 1 if the read came from an index cursor */
 } TrackRead;
 
+typedef struct TrackWrite {
+  const char *zTable;
+  sqlite3_int64 rowid;      /* -1 for whole-table TRUNCATE */
+  int iQuery;
+  char op;                  /* 'I' | 'D' | 'T' */
+} TrackWrite;
+
 typedef struct TrackQuery {
   char *zSql;               /* owned copy of the SQL text */
   char *zRows;              /* JSON array; grown incrementally */
@@ -58,6 +65,11 @@ struct TrackState {
   TrackRead *aRead;
   int nRead;
   int nReadAlloc;
+
+  /* Writes */
+  TrackWrite *aWrite;
+  int nWrite;
+  int nWriteAlloc;
 
   /* Queries */
   TrackQuery *aQuery;
@@ -196,6 +208,7 @@ static void trackFreeState(void *pArg){
   for(int i=0; i<ts->nQuery; i++) trackFreeQuery(&ts->aQuery[i]);
   free(ts->aQuery);
   free(ts->aRead);
+  free(ts->aWrite);
   /* aNameCache[i].zName is a non-owning pointer into the SQLite schema;
   ** do NOT free. */
   free(ts->aNameCache);
@@ -233,6 +246,7 @@ static void resetCollected(TrackState *ts){
   for(int i=0; i<ts->nQuery; i++) trackFreeQuery(&ts->aQuery[i]);
   free(ts->aQuery); ts->aQuery=NULL; ts->nQuery=0; ts->nQueryAlloc=0;
   free(ts->aRead); ts->aRead=NULL; ts->nRead=0; ts->nReadAlloc=0;
+  free(ts->aWrite); ts->aWrite=NULL; ts->nWrite=0; ts->nWriteAlloc=0;
   ts->haveLastRead = 0;
   free(ts->zDump); ts->zDump = NULL;
 }
@@ -282,6 +296,24 @@ int sqlite3_track_read_get(
   return 1;
 }
 
+int sqlite3_track_write_count(sqlite3 *db){
+  TrackState *ts = sqlite3TrackOfDb(db);
+  return ts ? ts->nWrite : 0;
+}
+
+int sqlite3_track_write_get(
+  sqlite3 *db, int i,
+  const char **pzTable, sqlite3_int64 *pRowid, char *pOp, int *pQueryIndex
+){
+  TrackState *ts = sqlite3TrackOfDb(db);
+  if( !ts || i<0 || i>=ts->nWrite ) return 0;
+  if( pzTable )    *pzTable = ts->aWrite[i].zTable;
+  if( pRowid )     *pRowid = ts->aWrite[i].rowid;
+  if( pOp )        *pOp = ts->aWrite[i].op;
+  if( pQueryIndex) *pQueryIndex = ts->aWrite[i].iQuery;
+  return 1;
+}
+
 int sqlite3_track_query_count(sqlite3 *db){
   TrackState *ts = sqlite3TrackOfDb(db);
   return ts ? ts->nQuery : 0;
@@ -304,7 +336,7 @@ const char *sqlite3_track_query_rows_json(sqlite3 *db, int i){
 
 const char *sqlite3_track_dump_json(sqlite3 *db){
   TrackState *ts = sqlite3TrackOfDb(db);
-  if( !ts ) return "{\"reads\":[],\"queries\":[]}";
+  if( !ts ) return "{\"reads\":[],\"writes\":[],\"queries\":[]}";
   free(ts->zDump); ts->zDump = NULL;
   int n=0, nAlloc=0;
   char *buf = NULL;
@@ -319,6 +351,19 @@ const char *sqlite3_track_dump_json(sqlite3 *db){
     if( appendI64(&buf,&n,&nAlloc, ts->aRead[i].iQuery) ) goto oom;
     if( appendStr(&buf,&n,&nAlloc, ",\"index\":", -1) ) goto oom;
     if( appendStr(&buf,&n,&nAlloc, ts->aRead[i].isIndex?"true":"false", -1) ) goto oom;
+    if( appendChar(&buf,&n,&nAlloc, '}') ) goto oom;
+  }
+  if( appendStr(&buf,&n,&nAlloc, "],\"writes\":[", -1) ) goto oom;
+  for(int i=0;i<ts->nWrite;i++){
+    if( i>0 && appendChar(&buf,&n,&nAlloc, ',') ) goto oom;
+    if( appendStr(&buf,&n,&nAlloc, "{\"table\":", -1) ) goto oom;
+    if( appendJsonString(&buf,&n,&nAlloc, ts->aWrite[i].zTable, -1) ) goto oom;
+    if( appendStr(&buf,&n,&nAlloc, ",\"rowid\":", -1) ) goto oom;
+    if( appendI64(&buf,&n,&nAlloc, ts->aWrite[i].rowid) ) goto oom;
+    if( appendStr(&buf,&n,&nAlloc, ",\"op\":\"", -1) ) goto oom;
+    if( appendChar(&buf,&n,&nAlloc, ts->aWrite[i].op) ) goto oom;
+    if( appendStr(&buf,&n,&nAlloc, "\",\"query\":", -1) ) goto oom;
+    if( appendI64(&buf,&n,&nAlloc, ts->aWrite[i].iQuery) ) goto oom;
     if( appendChar(&buf,&n,&nAlloc, '}') ) goto oom;
   }
   if( appendStr(&buf,&n,&nAlloc, "],\"queries\":[", -1) ) goto oom;
@@ -452,4 +497,31 @@ void sqlite3TrackCursorRead(
   r->rowid   = rowid;
   r->iQuery  = iQuery;
   r->isIndex = isIndex ? 1 : 0;
+}
+
+void sqlite3TrackCursorWrite(
+  TrackState *ts,
+  int iQuery,
+  sqlite3 *db,
+  int iDb,
+  unsigned int pgnoRoot,
+  sqlite3_int64 rowid,
+  char op
+){
+  if( !sqlite3TrackActive(ts) ) return;
+  if( pgnoRoot==0 ) return;
+  const char *zName = lookupName(ts, iDb, pgnoRoot);
+  if( !zName ) return;
+  if( ts->nWrite==ts->nWriteAlloc ){
+    int n = ts->nWriteAlloc ? ts->nWriteAlloc*2 : 16;
+    TrackWrite *p = (TrackWrite*)realloc(ts->aWrite, (size_t)n*sizeof(TrackWrite));
+    if( !p ) return;
+    ts->aWrite = p;
+    ts->nWriteAlloc = n;
+  }
+  TrackWrite *w = &ts->aWrite[ts->nWrite++];
+  w->zTable = zName;
+  w->rowid  = (op==SQLITE_TRACK_OP_TRUNCATE) ? -1 : rowid;
+  w->iQuery = iQuery;
+  w->op     = op;
 }

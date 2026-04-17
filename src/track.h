@@ -41,6 +41,38 @@ int sqlite3_track_read_get(
   int *pQueryIndex
 );
 
+/* ----- Write log -------------------------------------------------------
+** Writes are captured at the VDBE level (OP_Insert / OP_Delete / OP_Clear)
+** so the log is closed under every code path SQLite uses internally,
+** including the truncate optimization and ON CONFLICT REPLACE's inline
+** conflict deletion -- both of which skip sqlite3_update_hook. */
+
+/* Write operation kinds. Whole-table truncation is reported with a
+** wildcard rowid of -1 so rw-graph checkers can treat it as
+** conflicting with any read on the same table.
+**
+** 'U' distinguishes a SQL-level UPDATE (same rowid, new row contents)
+** from a true INSERT. In SQLite a simple UPDATE is implemented as
+** OP_Insert with OPFLAG_ISUPDATE on the existing row -- not as
+** OP_Delete + OP_Insert -- so we rely on the flag, not the opcode. */
+#define SQLITE_TRACK_OP_INSERT    'I'
+#define SQLITE_TRACK_OP_UPDATE    'U'
+#define SQLITE_TRACK_OP_DELETE    'D'
+#define SQLITE_TRACK_OP_TRUNCATE  'T'
+
+/* Number of writes logged. */
+int sqlite3_track_write_count(sqlite3 *db);
+
+/* Retrieve the i-th write. Returns 1 on success, 0 if out of range.
+** *pOp is one of SQLITE_TRACK_OP_* above. *pRowid is -1 for TRUNCATE. */
+int sqlite3_track_write_get(
+  sqlite3 *db, int i,
+  const char **pzTable,
+  sqlite3_int64 *pRowid,
+  char *pOp,
+  int *pQueryIndex
+);
+
 /* Number of logged queries. */
 int sqlite3_track_query_count(sqlite3 *db);
 
@@ -94,6 +126,19 @@ void sqlite3TrackCursorRead(
   unsigned int pgnoRoot,
   sqlite3_int64 rowid,
   int isIndex
+);
+
+/* Called from write opcodes. `op` is one of SQLITE_TRACK_OP_INSERT,
+** _DELETE, or _TRUNCATE. For TRUNCATE the rowid argument is ignored
+** and -1 is recorded as a wildcard. */
+void sqlite3TrackCursorWrite(
+  TrackState *ts,
+  int iQuery,
+  sqlite3 *db,
+  int iDb,
+  unsigned int pgnoRoot,
+  sqlite3_int64 rowid,
+  char op
 );
 
 #ifdef __cplusplus

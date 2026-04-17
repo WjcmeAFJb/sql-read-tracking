@@ -106,6 +106,10 @@ Module["onRuntimeInitialized"] = function onRuntimeInitialized(){
                                   ["number"]);
   var _track_read_get     = cwrap("sqlite3_track_read_get", "number",
     ["number", "number", "number", "number", "number"]);
+  var _track_write_count  = cwrap("sqlite3_track_write_count", "number",
+                                  ["number"]);
+  var _track_write_get    = cwrap("sqlite3_track_write_get", "number",
+    ["number", "number", "number", "number", "number", "number"]);
   var _track_query_count  = cwrap("sqlite3_track_query_count", "number",
                                   ["number"]);
   var _track_query_sql    = cwrap("sqlite3_track_query_sql", "string",
@@ -380,6 +384,42 @@ Module["onRuntimeInitialized"] = function onRuntimeInitialized(){
           : (BigInt(hi) << 32n) | BigInt(lo >>> 0);
         var q = getValue(pQ, "i32");
         out[i] = {table: tbl, rowid: rowid, query: q};
+      }
+    } finally {
+      stackRestore(sp);
+    }
+    return out;
+  };
+
+  Database.prototype["getWriteLog"] = function(){
+    var n = _track_write_count(this.ptr);
+    var out = new Array(n);
+    var sp = stackSave();
+    try {
+      var pTbl = stackAlloc(4);
+      var pRow = stackAlloc(8);
+      var pOp  = stackAlloc(4);
+      var pQ   = stackAlloc(4);
+      for(var i=0;i<n;i++){
+        var ok = _track_write_get(this.ptr, i, pTbl, pRow, pOp, pQ);
+        if( !ok ){ out[i] = null; continue; }
+        var tblPtr = getValue(pTbl, "*");
+        var tbl = tblPtr ? UTF8ToString(tblPtr) : null;
+        var lo = getValue(pRow, "i32");
+        var hi = getValue(pRow+4, "i32");
+        var combined = hi * 4294967296 + (lo >>> 0);
+        var rowid = Number.isSafeInteger(combined)
+          ? combined
+          : (BigInt(hi) << 32n) | BigInt(lo >>> 0);
+        /* op is stored as a single char; pOp points at the low byte. */
+        var opCode = HEAPU8[pOp];
+        var op = opCode === 0x49 ? "insert"    /* 'I' */
+               : opCode === 0x55 ? "update"    /* 'U' */
+               : opCode === 0x44 ? "delete"    /* 'D' */
+               : opCode === 0x54 ? "truncate"  /* 'T' */
+               : String.fromCharCode(opCode);
+        var q = getValue(pQ, "i32");
+        out[i] = {table: tbl, rowid: rowid, op: op, query: q};
       }
     } finally {
       stackRestore(sp);

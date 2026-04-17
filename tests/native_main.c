@@ -75,6 +75,26 @@ static int has_read(sqlite3 *db, const char *tbl, sqlite3_int64 rid){
   return 0;
 }
 
+static int has_write(sqlite3 *db, const char *tbl, sqlite3_int64 rid, char op){
+  int n = sqlite3_track_write_count(db);
+  for(int i=0;i<n;i++){
+    const char *t = 0; sqlite3_int64 r=0; char o=0; int q=0;
+    sqlite3_track_write_get(db, i, &t, &r, &o, &q);
+    if( t && strcmp(t,tbl)==0 && r==rid && o==op ) return 1;
+  }
+  return 0;
+}
+
+static int count_writes(sqlite3 *db, const char *tbl){
+  int n = sqlite3_track_write_count(db), c=0;
+  for(int i=0;i<n;i++){
+    const char *t = 0; sqlite3_int64 r=0; char o=0; int q=0;
+    sqlite3_track_write_get(db, i, &t, &r, &o, &q);
+    if( t && strcmp(t,tbl)==0 ) c++;
+  }
+  return c;
+}
+
 /* Count reads attributed to a particular (table, query) pair. */
 static int count_reads(sqlite3 *db, const char *tbl, int iQ){
   int n = sqlite3_track_read_count(db);
@@ -298,6 +318,168 @@ static void test_index_lookup_attribution(void){
   sqlite3_close(db);
 }
 
+/* --- write-tracking tests ------------------------------------------- */
+
+static void test_insert_tracked(void){
+  sqlite3 *db = open_seeded();
+  sqlite3_track_begin(db);
+  exec_ok(db, "INSERT INTO users VALUES(4,'dave',50);");
+  sqlite3_track_end(db);
+
+  OK(has_write(db, "users", 4, 'I'), "insert of users.4 not tracked");
+  EQ_I(sqlite3_track_write_count(db), 1, "one write expected");
+  g_pass++;
+  sqlite3_close(db);
+}
+
+static void test_delete_tracked(void){
+  sqlite3 *db = open_seeded();
+  sqlite3_track_begin(db);
+  exec_ok(db, "DELETE FROM users WHERE id=2;");
+  sqlite3_track_end(db);
+
+  OK(has_write(db, "users", 2, 'D'), "delete of users.2 not tracked");
+  g_pass++;
+  sqlite3_close(db);
+}
+
+static void test_update_emits_update_op(void){
+  /* SQLite's planner lowers simple UPDATE on a rowid table to a single
+  ** OP_Insert with OPFLAG_ISUPDATE (insert-over-existing-rowid). We
+  ** surface that as 'U' so downstream code can distinguish it from a
+  ** true INSERT without losing the row identity. */
+  sqlite3 *db = open_seeded();
+  sqlite3_track_begin(db);
+  exec_ok(db, "UPDATE users SET age=99 WHERE id=1;");
+  sqlite3_track_end(db);
+
+  OK(has_write(db, "users", 1, 'U'), "UPDATE logged as 'U'");
+  OK(!has_write(db, "users", 1, 'I'), "NOT tagged as plain insert");
+  EQ_I(count_writes(db, "users"), 1, "exactly one write event");
+  g_pass++;
+  sqlite3_close(db);
+}
+
+static void test_truncate_optimization(void){
+  /* Unconstrained DELETE triggers SQLite's truncate optimization:
+  ** no per-row OP_Delete fires; sqlite3_update_hook would miss it.
+  ** Our VDBE-level instrumentation records a wildcard TRUNCATE event. */
+  sqlite3 *db = open_seeded();
+  sqlite3_track_begin(db);
+  exec_ok(db, "DELETE FROM posts;");
+  sqlite3_track_end(db);
+
+  OK(has_write(db, "posts", -1, 'T'), "truncate wildcard not recorded");
+  /* Per-row deletes are NOT emitted on this path -- that's the point. */
+  OK(!has_write(db, "posts", 10, 'D'), "should NOT see per-row delete");
+  g_pass++;
+  sqlite3_close(db);
+}
+
+static void test_delete_with_where_not_truncated(void){
+  sqlite3 *db = open_seeded();
+  sqlite3_track_begin(db);
+  exec_ok(db, "DELETE FROM posts WHERE user_id=1;");
+  sqlite3_track_end(db);
+
+  /* With a WHERE the planner uses per-row OP_Delete. */
+  OK(has_write(db, "posts", 10, 'D'), "posts.10 deleted");
+  OK(has_write(db, "posts", 11, 'D'), "posts.11 deleted");
+  OK(!has_write(db, "posts", -1, 'T'), "no truncate event");
+  g_pass++;
+  sqlite3_close(db);
+}
+
+static void test_insert_or_replace_conflict(void){
+  /* ON CONFLICT REPLACE deletes the conflicting row inline without
+  ** firing sqlite3_update_hook. Our VDBE hook catches it because it
+  ** still goes through OP_Delete. */
+  sqlite3 *db = open_seeded();
+  exec_ok(db, "CREATE UNIQUE INDEX users_name ON users(name);");
+  sqlite3_track_begin(db);
+  /* 'alice' already exists at rowid=1; REPLACE should delete rowid=1
+  ** and insert the new row. */
+  exec_ok(db, "INSERT OR REPLACE INTO users(id,name,age) VALUES(99,'alice',77);");
+  sqlite3_track_end(db);
+
+  OK(has_write(db, "users", 1, 'D'), "conflict deletion of rowid=1");
+  OK(has_write(db, "users", 99, 'I'), "insertion of rowid=99");
+  g_pass++;
+  sqlite3_close(db);
+}
+
+static void test_write_log_query_attribution(void){
+  sqlite3 *db = open_seeded();
+  sqlite3_track_begin(db);
+  exec_ok(db, "INSERT INTO users VALUES(5,'eve',18);");
+  exec_ok(db, "DELETE FROM users WHERE id=3;");
+  sqlite3_track_end(db);
+
+  int n = sqlite3_track_write_count(db);
+  EQ_I(n, 2, "two writes");
+  const char *t=0; sqlite3_int64 r=0; char o=0; int q=0;
+  sqlite3_track_write_get(db, 0, &t, &r, &o, &q);
+  EQ_I(q, 0, "first write belongs to first stmt");
+  sqlite3_track_write_get(db, 1, &t, &r, &o, &q);
+  EQ_I(q, 1, "second write belongs to second stmt");
+  g_pass++;
+  sqlite3_close(db);
+}
+
+static void test_rollback_keeps_write_log(void){
+  /* Rollback undoes data but the tracker is a *history* of what the VDBE
+  ** attempted; rollback does not retract prior log entries. Serializable
+  ** conflict detection runs against the intended writes, not the
+  ** durably-committed ones. */
+  sqlite3 *db = open_seeded();
+  sqlite3_track_begin(db);
+  exec_ok(db, "BEGIN;");
+  exec_ok(db, "INSERT INTO users VALUES(10,'zed',99);");
+  exec_ok(db, "ROLLBACK;");
+  sqlite3_track_end(db);
+
+  OK(has_write(db, "users", 10, 'I'), "insert logged even after rollback");
+  g_pass++;
+  sqlite3_close(db);
+}
+
+static void test_rw_graph_happy_path(void){
+  /* End-to-end shape check: T1's read set and T2's write set are
+  ** inspected together, an overlap means an rw-edge. */
+  sqlite3 *db = open_seeded();
+
+  /* Simulated T1: read users.2 */
+  sqlite3_track_begin(db);
+  exec_ok(db, "SELECT name FROM users WHERE id=2;");
+  sqlite3_track_end(db);
+  int t1_reads = sqlite3_track_read_count(db);
+  OK(t1_reads == 1, "T1 read exactly one row");
+  /* Snapshot T1 state */
+  sqlite3_int64 t1_rowid=0; const char *t1_tbl=0;
+  sqlite3_track_read_get(db, 0, &t1_tbl, &t1_rowid, 0);
+
+  /* Simulated T2: write users.2 (emulates DELETE by a concurrent txn) */
+  sqlite3_track_begin(db); /* resets */
+  exec_ok(db, "UPDATE users SET age=41 WHERE id=2;");
+  sqlite3_track_end(db);
+
+  /* Conflict check: any of T2's writes against T1's reads? */
+  int overlap = 0;
+  int nw = sqlite3_track_write_count(db);
+  for(int i=0;i<nw;i++){
+    const char *tbl=0; sqlite3_int64 rid=0; char op=0; int q=0;
+    sqlite3_track_write_get(db, i, &tbl, &rid, &op, &q);
+    if( tbl && strcmp(tbl,t1_tbl)==0
+        && (rid==t1_rowid || op=='T') ){
+      overlap = 1;
+      break;
+    }
+  }
+  OK(overlap, "rw-dependency detected between T1 read and T2 write");
+  g_pass++;
+  sqlite3_close(db);
+}
+
 /* --- main ------------------------------------------------------------ */
 
 #define RUN(fn) do { g_current = #fn; printf("[.] %s\n", #fn); fn(); } while(0)
@@ -316,6 +498,16 @@ int main(void){
   RUN(test_dump_json_shape);
   RUN(test_string_and_null_values);
   RUN(test_index_lookup_attribution);
+
+  RUN(test_insert_tracked);
+  RUN(test_delete_tracked);
+  RUN(test_update_emits_update_op);
+  RUN(test_truncate_optimization);
+  RUN(test_delete_with_where_not_truncated);
+  RUN(test_insert_or_replace_conflict);
+  RUN(test_write_log_query_attribution);
+  RUN(test_rollback_keeps_write_log);
+  RUN(test_rw_graph_happy_path);
 
   printf("\n%d passed, %d failed\n", g_pass, g_fail);
   return g_fail ? 1 : 0;

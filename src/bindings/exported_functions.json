@@ -41,6 +41,8 @@
 "_sqlite3_track_is_enabled",
 "_sqlite3_track_read_count",
 "_sqlite3_track_read_get",
+"_sqlite3_track_write_count",
+"_sqlite3_track_write_get",
 "_sqlite3_track_query_count",
 "_sqlite3_track_query_sql",
 "_sqlite3_track_query_rows_json",
