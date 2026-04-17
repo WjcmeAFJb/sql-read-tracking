@@ -124,9 +124,9 @@ Module["onRuntimeInitialized"] = function onRuntimeInitialized() {
   var _track_write_count = cwrap("sqlite3_track_write_count", "number", [ "number" ]);
   var _track_write_get = cwrap("sqlite3_track_write_get", "number", [ "number", "number", "number", "number", "number", "number" ]);
   var _track_pred_count = cwrap("sqlite3_track_predicate_count", "number", [ "number" ]);
-  var _track_pred_get = cwrap("sqlite3_track_predicate_get", "number", [ "number", "number", "number", "number", "number", "number", "number" ]);
+  var _track_pred_get = cwrap("sqlite3_track_predicate_get", "number", [ "number", "number", "number", "number", "number", "number", "number", "number" ]);
   var _track_idxw_count = cwrap("sqlite3_track_idxwrite_count", "number", [ "number" ]);
-  var _track_idxw_get = cwrap("sqlite3_track_idxwrite_get", "number", [ "number", "number", "number", "number", "number", "number", "number" ]);
+  var _track_idxw_get = cwrap("sqlite3_track_idxwrite_get", "number", [ "number", "number", "number", "number", "number", "number", "number", "number" ]);
   var _track_query_count = cwrap("sqlite3_track_query_count", "number", [ "number" ]);
   var _track_query_sql = cwrap("sqlite3_track_query_sql", "string", [ "number", "number" ]);
   var _track_query_rows_json = cwrap("sqlite3_track_query_rows_json", "string", [ "number", "number" ]);
@@ -434,16 +434,18 @@ Module["onRuntimeInitialized"] = function onRuntimeInitialized() {
     var sp = stackSave();
     try {
       var pTbl = stackAlloc(4);
+      var pIdx = stackAlloc(4);
       var pKind = stackAlloc(4);
       var pOp = stackAlloc(4);
       var pKey = stackAlloc(4);
       var pQ = stackAlloc(4);
       for (var i = 0; i < n; i++) {
-        if (!_track_pred_get(this.ptr, i, pTbl, pKind, pOp, pKey, pQ)) {
+        if (!_track_pred_get(this.ptr, i, pTbl, pIdx, pKind, pOp, pKey, pQ)) {
           out[i] = null;
           continue;
         }
         var tblPtr = getValue(pTbl, "*");
+        var idxPtr = getValue(pIdx, "*");
         var keyPtr = getValue(pKey, "*");
         var keyStr = keyPtr ? UTF8ToString(keyPtr) : null;
         var key = null;
@@ -454,6 +456,7 @@ Module["onRuntimeInitialized"] = function onRuntimeInitialized() {
         }
         out[i] = {
           table: tblPtr ? UTF8ToString(tblPtr) : null,
+          index: idxPtr ? UTF8ToString(idxPtr) : null,
           kind: String.fromCharCode(HEAPU8[pKind]),
           op: String.fromCharCode(HEAPU8[pOp]),
           key,
@@ -471,16 +474,18 @@ Module["onRuntimeInitialized"] = function onRuntimeInitialized() {
     var sp = stackSave();
     try {
       var pTbl = stackAlloc(4);
+      var pIdx = stackAlloc(4);
       var pKey = stackAlloc(4);
       var pRow = stackAlloc(8);
       var pOp = stackAlloc(4);
       var pQ = stackAlloc(4);
       for (var i = 0; i < n; i++) {
-        if (!_track_idxw_get(this.ptr, i, pTbl, pKey, pRow, pOp, pQ)) {
+        if (!_track_idxw_get(this.ptr, i, pTbl, pIdx, pKey, pRow, pOp, pQ)) {
           out[i] = null;
           continue;
         }
         var tblPtr = getValue(pTbl, "*");
+        var idxPtr = getValue(pIdx, "*");
         var keyPtr = getValue(pKey, "*");
         var keyStr = keyPtr ? UTF8ToString(keyPtr) : null;
         var key = null;
@@ -496,6 +501,7 @@ Module["onRuntimeInitialized"] = function onRuntimeInitialized() {
         var opCode = HEAPU8[pOp];
         out[i] = {
           table: tblPtr ? UTF8ToString(tblPtr) : null,
+          index: idxPtr ? UTF8ToString(idxPtr) : null,
           key,
           rowid,
           op: opCode === 73 ? "insert" : opCode === 68 ? "delete" : String.fromCharCode(opCode),

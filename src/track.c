@@ -16,9 +16,12 @@
 #include <string.h>
 #include <stdio.h>
 
-/* Schema resolver implemented inside the patched sqlite3.c (see the
+/* Schema resolvers implemented inside the patched sqlite3.c (see the
 ** "read-tracking support" hunk near end of file). */
 extern const char *sqlite3TrackTableNameByRootPage(
+  sqlite3 *db, int iDb, unsigned int pgnoRoot
+);
+extern const char *sqlite3TrackIndexNameByRootPage(
   sqlite3 *db, int iDb, unsigned int pgnoRoot
 );
 
@@ -44,7 +47,8 @@ typedef struct TrackWrite {
 } TrackWrite;
 
 typedef struct TrackPred {
-  const char *zTable;
+  const char *zTable;       /* base-table name (non-owning into schema) */
+  const char *zIndex;       /* index name, or NULL for a table-cursor scan */
   char *zKeyJson;           /* owned; NULL for kind=='r' */
   int iQuery;
   char kind;                /* 's' seek, 'e' end, 'r' rewind */
@@ -52,7 +56,8 @@ typedef struct TrackPred {
 } TrackPred;
 
 typedef struct TrackIdxWrite {
-  const char *zTable;
+  const char *zTable;       /* base-table name */
+  const char *zIndex;       /* index name (always set -- this is an index write) */
   char *zKeyJson;           /* owned */
   sqlite3_int64 rowid;
   int iQuery;
@@ -355,12 +360,14 @@ int sqlite3_track_predicate_count(sqlite3 *db){
 
 int sqlite3_track_predicate_get(
   sqlite3 *db, int i,
-  const char **pzTable, char *pKind, char *pOp,
+  const char **pzTable, const char **pzIndex,
+  char *pKind, char *pOp,
   const char **pzKeyJson, int *pQueryIndex
 ){
   TrackState *ts = sqlite3TrackOfDb(db);
   if( !ts || i<0 || i>=ts->nPred ) return 0;
   if( pzTable )    *pzTable = ts->aPred[i].zTable;
+  if( pzIndex )    *pzIndex = ts->aPred[i].zIndex;
   if( pKind )      *pKind = ts->aPred[i].kind;
   if( pOp )        *pOp = ts->aPred[i].op;
   if( pzKeyJson )  *pzKeyJson = ts->aPred[i].zKeyJson;
@@ -375,12 +382,14 @@ int sqlite3_track_idxwrite_count(sqlite3 *db){
 
 int sqlite3_track_idxwrite_get(
   sqlite3 *db, int i,
-  const char **pzTable, const char **pzKeyJson,
+  const char **pzTable, const char **pzIndex,
+  const char **pzKeyJson,
   sqlite3_int64 *pRowid, char *pOp, int *pQueryIndex
 ){
   TrackState *ts = sqlite3TrackOfDb(db);
   if( !ts || i<0 || i>=ts->nIdxWrite ) return 0;
   if( pzTable )    *pzTable = ts->aIdxWrite[i].zTable;
+  if( pzIndex )    *pzIndex = ts->aIdxWrite[i].zIndex;
   if( pzKeyJson )  *pzKeyJson = ts->aIdxWrite[i].zKeyJson;
   if( pRowid )     *pRowid = ts->aIdxWrite[i].rowid;
   if( pOp )        *pOp = ts->aIdxWrite[i].op;
@@ -588,6 +597,7 @@ void sqlite3TrackPredicate(
   if( pgnoRoot==0 ) return;
   const char *zName = lookupName(ts, iDb, pgnoRoot);
   if( !zName ) return;
+  const char *zIndex = sqlite3TrackIndexNameByRootPage(ts->db, iDb, pgnoRoot);
   if( ts->nPred==ts->nPredAlloc ){
     int n = ts->nPredAlloc ? ts->nPredAlloc*2 : 8;
     TrackPred *p = (TrackPred*)realloc(ts->aPred, (size_t)n*sizeof(TrackPred));
@@ -602,6 +612,7 @@ void sqlite3TrackPredicate(
   }
   TrackPred *e = &ts->aPred[ts->nPred++];
   e->zTable   = zName;
+  e->zIndex   = zIndex;       /* NULL for main-table scans */
   e->zKeyJson = zKey;
   e->iQuery   = iQuery;
   e->kind     = kind;
@@ -623,6 +634,7 @@ void sqlite3TrackIndexWrite(
   if( pgnoRoot==0 ) return;
   const char *zName = lookupName(ts, iDb, pgnoRoot);
   if( !zName ) return;
+  const char *zIndex = sqlite3TrackIndexNameByRootPage(ts->db, iDb, pgnoRoot);
   if( ts->nIdxWrite==ts->nIdxWriteAlloc ){
     int n = ts->nIdxWriteAlloc ? ts->nIdxWriteAlloc*2 : 8;
     TrackIdxWrite *p = (TrackIdxWrite*)realloc(
@@ -638,6 +650,7 @@ void sqlite3TrackIndexWrite(
   }
   TrackIdxWrite *e = &ts->aIdxWrite[ts->nIdxWrite++];
   e->zTable   = zName;
+  e->zIndex   = zIndex;
   e->zKeyJson = zKey;
   e->rowid    = rowid;
   e->iQuery   = iQuery;

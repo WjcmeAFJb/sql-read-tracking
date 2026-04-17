@@ -48,6 +48,8 @@ export type SqlKey = (null | number | string | Uint8Array)[];
 
 export interface PredicateLogEntry {
   table: string;
+  /** Index name, or null for a scan on the main table (primary key / rowid). */
+  index: string | null;
   /** 's' = seek (range opened), 'e' = terminator (range closed), 'r' = rewind (full scan) */
   kind: "s" | "e" | "r";
   /** 'G' GE (incl), 'g' GT (excl), 'L' LE (incl), 'l' LT (excl), 'F' full */
@@ -59,6 +61,10 @@ export interface PredicateLogEntry {
 
 export interface IndexWriteLogEntry {
   table: string;
+  /** Index name. Phantom detection should only compare keys across events
+   *  that share the same index, because key vectors from different
+   *  indexes have no meaningful ordering. */
+  index: string | null;
   /** Unpacked index key vector (last element is the rowid for rowid-table indexes). */
   key: SqlKey;
   rowid: number | bigint;

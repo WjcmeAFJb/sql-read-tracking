@@ -38,6 +38,7 @@
     "test:e2e": "vitest run",
     "test:e2e:watch": "vitest",
     "test": "bash scripts/build-test.sh && node build/tests.js && npm run build && vitest run",
+    "demo": "node examples/cluster-demo.mjs",
     "prepublishOnly": "bash scripts/build-wasm.sh"
   },
   "devDependencies": {

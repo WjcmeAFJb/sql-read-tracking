@@ -90,6 +90,7 @@ int sqlite3_track_predicate_count(sqlite3 *db);
 int sqlite3_track_predicate_get(
   sqlite3 *db, int i,
   const char **pzTable,
+  const char **pzIndex,    /* NULL for main-table scans */
   char *pKind,
   char *pOp,
   const char **pzKeyJson,
@@ -105,6 +106,7 @@ int sqlite3_track_idxwrite_count(sqlite3 *db);
 int sqlite3_track_idxwrite_get(
   sqlite3 *db, int i,
   const char **pzTable,
+  const char **pzIndex,
   const char **pzKeyJson,
   sqlite3_int64 *pRowid,
   char *pOp,            /* 'I' or 'D' */
