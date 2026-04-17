@@ -110,6 +110,14 @@ Module["onRuntimeInitialized"] = function onRuntimeInitialized(){
                                   ["number"]);
   var _track_write_get    = cwrap("sqlite3_track_write_get", "number",
     ["number", "number", "number", "number", "number", "number"]);
+  var _track_pred_count   = cwrap("sqlite3_track_predicate_count", "number",
+                                  ["number"]);
+  var _track_pred_get     = cwrap("sqlite3_track_predicate_get", "number",
+    ["number", "number", "number", "number", "number", "number", "number"]);
+  var _track_idxw_count   = cwrap("sqlite3_track_idxwrite_count", "number",
+                                  ["number"]);
+  var _track_idxw_get     = cwrap("sqlite3_track_idxwrite_get", "number",
+    ["number", "number", "number", "number", "number", "number", "number"]);
   var _track_query_count  = cwrap("sqlite3_track_query_count", "number",
                                   ["number"]);
   var _track_query_sql    = cwrap("sqlite3_track_query_sql", "string",
@@ -424,6 +432,76 @@ Module["onRuntimeInitialized"] = function onRuntimeInitialized(){
     } finally {
       stackRestore(sp);
     }
+    return out;
+  };
+
+  Database.prototype["getPredicateLog"] = function(){
+    var n = _track_pred_count(this.ptr);
+    var out = new Array(n);
+    var sp = stackSave();
+    try {
+      var pTbl  = stackAlloc(4);
+      var pKind = stackAlloc(4);
+      var pOp   = stackAlloc(4);
+      var pKey  = stackAlloc(4);
+      var pQ    = stackAlloc(4);
+      for(var i=0;i<n;i++){
+        if( !_track_pred_get(this.ptr, i, pTbl, pKind, pOp, pKey, pQ) ){
+          out[i] = null; continue;
+        }
+        var tblPtr = getValue(pTbl, "*");
+        var keyPtr = getValue(pKey, "*");
+        var keyStr = keyPtr ? UTF8ToString(keyPtr) : null;
+        var key = null;
+        if( keyStr ){ try { key = JSON.parse(keyStr); } catch(e){} }
+        out[i] = {
+          table: tblPtr ? UTF8ToString(tblPtr) : null,
+          kind: String.fromCharCode(HEAPU8[pKind]),
+          op: String.fromCharCode(HEAPU8[pOp]),
+          key: key,
+          query: getValue(pQ, "i32"),
+        };
+      }
+    } finally { stackRestore(sp); }
+    return out;
+  };
+
+  Database.prototype["getIndexWriteLog"] = function(){
+    var n = _track_idxw_count(this.ptr);
+    var out = new Array(n);
+    var sp = stackSave();
+    try {
+      var pTbl = stackAlloc(4);
+      var pKey = stackAlloc(4);
+      var pRow = stackAlloc(8);
+      var pOp  = stackAlloc(4);
+      var pQ   = stackAlloc(4);
+      for(var i=0;i<n;i++){
+        if( !_track_idxw_get(this.ptr, i, pTbl, pKey, pRow, pOp, pQ) ){
+          out[i] = null; continue;
+        }
+        var tblPtr = getValue(pTbl, "*");
+        var keyPtr = getValue(pKey, "*");
+        var keyStr = keyPtr ? UTF8ToString(keyPtr) : null;
+        var key = null;
+        if( keyStr ){ try { key = JSON.parse(keyStr); } catch(e){} }
+        var lo = getValue(pRow, "i32");
+        var hi = getValue(pRow+4, "i32");
+        var combined = hi * 4294967296 + (lo >>> 0);
+        var rowid = Number.isSafeInteger(combined)
+          ? combined
+          : (BigInt(hi) << 32n) | BigInt(lo >>> 0);
+        var opCode = HEAPU8[pOp];
+        out[i] = {
+          table: tblPtr ? UTF8ToString(tblPtr) : null,
+          key: key,
+          rowid: rowid,
+          op: opCode === 0x49 ? "insert" : opCode === 0x44 ? "delete"
+              : String.fromCharCode(opCode),
+          query: getValue(pQ, "i32"),
+        };
+      }
+    } finally { stackRestore(sp); }
     return out;
   };
 

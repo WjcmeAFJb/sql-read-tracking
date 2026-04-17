@@ -73,6 +73,44 @@ int sqlite3_track_write_get(
   int *pQueryIndex
 );
 
+/* ----- Predicate log ---------------------------------------------------
+** Predicate (range-read) events let a rw-dependency consumer detect
+** phantom conflicts that point-read tracking misses: a concurrent insert
+** whose indexed key falls inside a range T1 scanned (even if the range
+** was empty at scan time) is a serializability violation.
+**
+** We emit one event per cursor boundary opcode:
+**   kind 's': OP_SeekGE/GT/LE/LT -- a range was opened at some key.
+**   kind 'e': OP_IdxGE/GT/LE/LT  -- a range was closed at loop exit.
+**   kind 'r': OP_Rewind/Last     -- a full-table scan began.
+**
+** `op` is the single-letter opcode ('G','g','L','l','F') and zKeyJson
+** is the key vector serialized as a JSON array (NULL for rewind). */
+int sqlite3_track_predicate_count(sqlite3 *db);
+int sqlite3_track_predicate_get(
+  sqlite3 *db, int i,
+  const char **pzTable,
+  char *pKind,
+  char *pOp,
+  const char **pzKeyJson,
+  int *pQueryIndex
+);
+
+/* ----- Index-write log -------------------------------------------------
+** OP_IdxInsert / OP_IdxDelete mutate a secondary index with a specific
+** key vector. Logging the key lets a phantom-detection checker test
+** whether a concurrent insert's indexed value falls in a predicate
+** range previously read, without having to reach into the row data. */
+int sqlite3_track_idxwrite_count(sqlite3 *db);
+int sqlite3_track_idxwrite_get(
+  sqlite3 *db, int i,
+  const char **pzTable,
+  const char **pzKeyJson,
+  sqlite3_int64 *pRowid,
+  char *pOp,            /* 'I' or 'D' */
+  int *pQueryIndex
+);
+
 /* Number of logged queries. */
 int sqlite3_track_query_count(sqlite3 *db);
 
@@ -138,6 +176,34 @@ void sqlite3TrackCursorWrite(
   int iDb,
   unsigned int pgnoRoot,
   sqlite3_int64 rowid,
+  char op
+);
+
+/* Called from seek/terminator opcodes. `kind` is 's','e','r'; `op` is
+** 'G','g','L','l','F'. `aMemKey` is an Mem[nKey] vector; ignored when
+** kind=='r' (rewind) -- pass NULL, 0. */
+void sqlite3TrackPredicate(
+  TrackState *ts,
+  int iQuery,
+  sqlite3 *db,
+  int iDb,
+  unsigned int pgnoRoot,
+  char kind,
+  char op,
+  void *aMemKey,
+  int nKey
+);
+
+/* Called from OP_IdxInsert / OP_IdxDelete. `op` is 'I' or 'D'. */
+void sqlite3TrackIndexWrite(
+  TrackState *ts,
+  int iQuery,
+  sqlite3 *db,
+  int iDb,
+  unsigned int pgnoRoot,
+  sqlite3_int64 rowid,
+  void *aMemKey,
+  int nKey,
   char op
 );
 

@@ -44,6 +44,28 @@ export interface WriteLogEntry {
   query: number;
 }
 
+export type SqlKey = (null | number | string | Uint8Array)[];
+
+export interface PredicateLogEntry {
+  table: string;
+  /** 's' = seek (range opened), 'e' = terminator (range closed), 'r' = rewind (full scan) */
+  kind: "s" | "e" | "r";
+  /** 'G' GE (incl), 'g' GT (excl), 'L' LE (incl), 'l' LT (excl), 'F' full */
+  op: "G" | "g" | "L" | "l" | "F";
+  /** Key vector for this boundary; null for full-scan events. */
+  key: SqlKey | null;
+  query: number;
+}
+
+export interface IndexWriteLogEntry {
+  table: string;
+  /** Unpacked index key vector (last element is the rowid for rowid-table indexes). */
+  key: SqlKey;
+  rowid: number | bigint;
+  op: "insert" | "delete";
+  query: number;
+}
+
 export interface QueryLogEntry {
   /** Original SQL text passed to prepare/exec. */
   sql: string;
@@ -95,6 +117,17 @@ export declare class Database {
    *  covers the truncate optimization and ON CONFLICT REPLACE paths that
    *  sqlite3_update_hook misses. */
   getWriteLog(): WriteLogEntry[];
+  /** Predicate (range) reads captured at OP_SeekGE/GT/LE/LT and their
+   *  OP_IdxGE/GT/LE/LT terminators. Used by phantom detection: pair up
+   *  'seek' and 'end' events for the same table (same query, same
+   *  cursor, no other events between them) to reconstruct the scanned
+   *  range, then check concurrent index-writes against that range. */
+  getPredicateLog(): PredicateLogEntry[];
+  /** Every OP_IdxInsert / OP_IdxDelete with its unpacked key vector.
+   *  Pair with getPredicateLog() to detect phantom conflicts: T2's
+   *  index-write whose key falls within T1's predicate range is a
+   *  rw-dependency even if the row didn't exist during T1's scan. */
+  getIndexWriteLog(): IndexWriteLogEntry[];
   /** Every executed statement plus the rows it emitted. */
   getQueryLog(): QueryLogEntry[];
   /** JSON-serialized dump of reads + writes + queries. */

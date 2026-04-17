@@ -40,8 +40,24 @@ typedef struct TrackWrite {
   const char *zTable;
   sqlite3_int64 rowid;      /* -1 for whole-table TRUNCATE */
   int iQuery;
-  char op;                  /* 'I' | 'D' | 'T' */
+  char op;                  /* 'I' | 'U' | 'D' | 'T' */
 } TrackWrite;
+
+typedef struct TrackPred {
+  const char *zTable;
+  char *zKeyJson;           /* owned; NULL for kind=='r' */
+  int iQuery;
+  char kind;                /* 's' seek, 'e' end, 'r' rewind */
+  char op;                  /* 'G','g','L','l','F' */
+} TrackPred;
+
+typedef struct TrackIdxWrite {
+  const char *zTable;
+  char *zKeyJson;           /* owned */
+  sqlite3_int64 rowid;
+  int iQuery;
+  char op;                  /* 'I' | 'D' */
+} TrackIdxWrite;
 
 typedef struct TrackQuery {
   char *zSql;               /* owned copy of the SQL text */
@@ -70,6 +86,16 @@ struct TrackState {
   TrackWrite *aWrite;
   int nWrite;
   int nWriteAlloc;
+
+  /* Predicate events */
+  TrackPred *aPred;
+  int nPred;
+  int nPredAlloc;
+
+  /* Index writes */
+  TrackIdxWrite *aIdxWrite;
+  int nIdxWrite;
+  int nIdxWriteAlloc;
 
   /* Queries */
   TrackQuery *aQuery;
@@ -209,6 +235,10 @@ static void trackFreeState(void *pArg){
   free(ts->aQuery);
   free(ts->aRead);
   free(ts->aWrite);
+  for(int i=0; i<ts->nPred; i++) free(ts->aPred[i].zKeyJson);
+  free(ts->aPred);
+  for(int i=0; i<ts->nIdxWrite; i++) free(ts->aIdxWrite[i].zKeyJson);
+  free(ts->aIdxWrite);
   /* aNameCache[i].zName is a non-owning pointer into the SQLite schema;
   ** do NOT free. */
   free(ts->aNameCache);
@@ -247,6 +277,10 @@ static void resetCollected(TrackState *ts){
   free(ts->aQuery); ts->aQuery=NULL; ts->nQuery=0; ts->nQueryAlloc=0;
   free(ts->aRead); ts->aRead=NULL; ts->nRead=0; ts->nReadAlloc=0;
   free(ts->aWrite); ts->aWrite=NULL; ts->nWrite=0; ts->nWriteAlloc=0;
+  for(int i=0; i<ts->nPred; i++) free(ts->aPred[i].zKeyJson);
+  free(ts->aPred); ts->aPred=NULL; ts->nPred=0; ts->nPredAlloc=0;
+  for(int i=0; i<ts->nIdxWrite; i++) free(ts->aIdxWrite[i].zKeyJson);
+  free(ts->aIdxWrite); ts->aIdxWrite=NULL; ts->nIdxWrite=0; ts->nIdxWriteAlloc=0;
   ts->haveLastRead = 0;
   free(ts->zDump); ts->zDump = NULL;
 }
@@ -311,6 +345,46 @@ int sqlite3_track_write_get(
   if( pRowid )     *pRowid = ts->aWrite[i].rowid;
   if( pOp )        *pOp = ts->aWrite[i].op;
   if( pQueryIndex) *pQueryIndex = ts->aWrite[i].iQuery;
+  return 1;
+}
+
+int sqlite3_track_predicate_count(sqlite3 *db){
+  TrackState *ts = sqlite3TrackOfDb(db);
+  return ts ? ts->nPred : 0;
+}
+
+int sqlite3_track_predicate_get(
+  sqlite3 *db, int i,
+  const char **pzTable, char *pKind, char *pOp,
+  const char **pzKeyJson, int *pQueryIndex
+){
+  TrackState *ts = sqlite3TrackOfDb(db);
+  if( !ts || i<0 || i>=ts->nPred ) return 0;
+  if( pzTable )    *pzTable = ts->aPred[i].zTable;
+  if( pKind )      *pKind = ts->aPred[i].kind;
+  if( pOp )        *pOp = ts->aPred[i].op;
+  if( pzKeyJson )  *pzKeyJson = ts->aPred[i].zKeyJson;
+  if( pQueryIndex) *pQueryIndex = ts->aPred[i].iQuery;
+  return 1;
+}
+
+int sqlite3_track_idxwrite_count(sqlite3 *db){
+  TrackState *ts = sqlite3TrackOfDb(db);
+  return ts ? ts->nIdxWrite : 0;
+}
+
+int sqlite3_track_idxwrite_get(
+  sqlite3 *db, int i,
+  const char **pzTable, const char **pzKeyJson,
+  sqlite3_int64 *pRowid, char *pOp, int *pQueryIndex
+){
+  TrackState *ts = sqlite3TrackOfDb(db);
+  if( !ts || i<0 || i>=ts->nIdxWrite ) return 0;
+  if( pzTable )    *pzTable = ts->aIdxWrite[i].zTable;
+  if( pzKeyJson )  *pzKeyJson = ts->aIdxWrite[i].zKeyJson;
+  if( pRowid )     *pRowid = ts->aIdxWrite[i].rowid;
+  if( pOp )        *pOp = ts->aIdxWrite[i].op;
+  if( pQueryIndex) *pQueryIndex = ts->aIdxWrite[i].iQuery;
   return 1;
 }
 
@@ -497,6 +571,77 @@ void sqlite3TrackCursorRead(
   r->rowid   = rowid;
   r->iQuery  = iQuery;
   r->isIndex = isIndex ? 1 : 0;
+}
+
+void sqlite3TrackPredicate(
+  TrackState *ts,
+  int iQuery,
+  sqlite3 *db,
+  int iDb,
+  unsigned int pgnoRoot,
+  char kind,
+  char op,
+  void *aMemKey,
+  int nKey
+){
+  if( !sqlite3TrackActive(ts) ) return;
+  if( pgnoRoot==0 ) return;
+  const char *zName = lookupName(ts, iDb, pgnoRoot);
+  if( !zName ) return;
+  if( ts->nPred==ts->nPredAlloc ){
+    int n = ts->nPredAlloc ? ts->nPredAlloc*2 : 8;
+    TrackPred *p = (TrackPred*)realloc(ts->aPred, (size_t)n*sizeof(TrackPred));
+    if( !p ) return;
+    ts->aPred = p;
+    ts->nPredAlloc = n;
+  }
+  char *zKey = NULL;
+  if( kind!='r' && aMemKey && nKey>0 ){
+    zKey = sqlite3TrackEncodeRowAsJson(aMemKey, nKey);
+    if( !zKey ) return;
+  }
+  TrackPred *e = &ts->aPred[ts->nPred++];
+  e->zTable   = zName;
+  e->zKeyJson = zKey;
+  e->iQuery   = iQuery;
+  e->kind     = kind;
+  e->op       = op;
+}
+
+void sqlite3TrackIndexWrite(
+  TrackState *ts,
+  int iQuery,
+  sqlite3 *db,
+  int iDb,
+  unsigned int pgnoRoot,
+  sqlite3_int64 rowid,
+  void *aMemKey,
+  int nKey,
+  char op
+){
+  if( !sqlite3TrackActive(ts) ) return;
+  if( pgnoRoot==0 ) return;
+  const char *zName = lookupName(ts, iDb, pgnoRoot);
+  if( !zName ) return;
+  if( ts->nIdxWrite==ts->nIdxWriteAlloc ){
+    int n = ts->nIdxWriteAlloc ? ts->nIdxWriteAlloc*2 : 8;
+    TrackIdxWrite *p = (TrackIdxWrite*)realloc(
+       ts->aIdxWrite, (size_t)n*sizeof(TrackIdxWrite));
+    if( !p ) return;
+    ts->aIdxWrite = p;
+    ts->nIdxWriteAlloc = n;
+  }
+  char *zKey = NULL;
+  if( aMemKey && nKey>0 ){
+    zKey = sqlite3TrackEncodeRowAsJson(aMemKey, nKey);
+    if( !zKey ) return;
+  }
+  TrackIdxWrite *e = &ts->aIdxWrite[ts->nIdxWrite++];
+  e->zTable   = zName;
+  e->zKeyJson = zKey;
+  e->rowid    = rowid;
+  e->iQuery   = iQuery;
+  e->op       = op;
 }
 
 void sqlite3TrackCursorWrite(
