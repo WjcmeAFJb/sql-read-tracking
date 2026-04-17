@@ -110,6 +110,8 @@ Module["onRuntimeInitialized"] = function onRuntimeInitialized(){
                                   ["number"]);
   var _track_write_get    = cwrap("sqlite3_track_write_get", "number",
     ["number", "number", "number", "number", "number", "number"]);
+  var _track_write_cols   = cwrap("sqlite3_track_write_columns", "string",
+                                  ["number", "number"]);
   var _track_pred_count   = cwrap("sqlite3_track_predicate_count", "number",
                                   ["number"]);
   var _track_pred_get     = cwrap("sqlite3_track_predicate_get", "number",
@@ -427,7 +429,9 @@ Module["onRuntimeInitialized"] = function onRuntimeInitialized(){
                : opCode === 0x54 ? "truncate"  /* 'T' */
                : String.fromCharCode(opCode);
         var q = getValue(pQ, "i32");
-        out[i] = {table: tbl, rowid: rowid, op: op, query: q};
+        var colsCsv = op === "update" ? _track_write_cols(this.ptr, i) : null;
+        var columns = colsCsv ? colsCsv.split(",") : null;
+        out[i] = {table: tbl, rowid: rowid, op: op, query: q, columns: columns};
       }
     } finally {
       stackRestore(sp);

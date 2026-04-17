@@ -43,6 +43,7 @@
 "_sqlite3_track_read_get",
 "_sqlite3_track_write_count",
 "_sqlite3_track_write_get",
+"_sqlite3_track_write_columns",
 "_sqlite3_track_predicate_count",
 "_sqlite3_track_predicate_get",
 "_sqlite3_track_idxwrite_count",

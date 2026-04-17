@@ -42,6 +42,10 @@ export interface WriteLogEntry {
   rowid: number | bigint;
   op: WriteOp;
   query: number;
+  /** For op="update", the names of the columns the SQL UPDATE assigned
+   *  to. Two UPDATEs on the same row with disjoint `columns` sets
+   *  commute -- no ww conflict. Null for insert/delete/truncate. */
+  columns: string[] | null;
 }
 
 export type SqlKey = (null | number | string | Uint8Array)[];

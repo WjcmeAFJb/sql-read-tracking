@@ -22,12 +22,69 @@ beforeEach(() => {
 });
 afterEach(() => { db.close(); });
 
+describe("Column-level write granularity", () => {
+  test("UPDATE records the column names from the SET clause", () => {
+    db.beginTracking();
+    db.exec("UPDATE users SET name='NEW' WHERE id=1");
+    const [w] = db.getWriteLog();
+    expect(w).toMatchObject({
+      table: "users", rowid: 1, op: "update",
+      columns: ["name"],
+    });
+  });
+
+  test("UPDATE with multiple SET targets records all of them", () => {
+    db.beginTracking();
+    db.exec("UPDATE users SET name='NEW', age=99 WHERE id=1");
+    const [w] = db.getWriteLog();
+    expect(w.columns.sort()).toEqual(["age", "name"]);
+  });
+
+  test("disjoint column updates on the same row expose commutativity", () => {
+    /* Two UPDATEs that touch different columns of the same row should
+    ** be recognisable as commutative by a downstream consumer: the
+    ** column sets are disjoint. This is the piece that the plain
+    ** row-level write log could not express. */
+    db.beginTracking();
+    db.exec("UPDATE users SET name='NEW' WHERE id=1");
+    const aCols = db.getWriteLog()[0].columns;
+    db.resetTracking();
+    db.beginTracking();
+    db.exec("UPDATE users SET age=99 WHERE id=1");
+    const bCols = db.getWriteLog()[0].columns;
+    const shared = aCols.filter(c => bCols.includes(c));
+    expect(shared).toEqual([]);
+  });
+
+  test("overlapping column updates retain intersection", () => {
+    db.beginTracking();
+    db.exec("UPDATE users SET name='X', age=10 WHERE id=1");
+    const aCols = db.getWriteLog()[0].columns;
+    db.resetTracking();
+    db.beginTracking();
+    db.exec("UPDATE users SET age=20 WHERE id=1");
+    const bCols = db.getWriteLog()[0].columns;
+    const shared = aCols.filter(c => bCols.includes(c));
+    expect(shared).toEqual(["age"]);
+  });
+
+  test("INSERT / DELETE / TRUNCATE do not carry a columns list", () => {
+    db.beginTracking();
+    db.exec("INSERT INTO users VALUES(99,'z',0)");
+    db.exec("DELETE FROM users WHERE id=99");
+    db.exec("DELETE FROM users"); // truncate
+    for (const w of db.getWriteLog()) {
+      expect(w.columns).toBeNull();
+    }
+  });
+});
+
 describe("Write log: basic ops", () => {
   test("INSERT produces one 'insert' entry", () => {
     db.beginTracking();
     db.exec("INSERT INTO users VALUES(4,'dave',50)");
     expect(db.getWriteLog()).toEqual([
-      { table: "users", rowid: 4, op: "insert", query: 0 },
+      { table: "users", rowid: 4, op: "insert", query: 0, columns: null },
     ]);
   });
 
@@ -61,7 +118,7 @@ describe("Write log: paths sqlite3_update_hook would miss", () => {
     db.exec("DELETE FROM posts");
     const writes = db.getWriteLog();
     expect(writes).toEqual([
-      { table: "posts", rowid: -1, op: "truncate", query: 0 },
+      { table: "posts", rowid: -1, op: "truncate", query: 0, columns: null },
     ]);
     expect(db.exec("SELECT COUNT(*) FROM posts")[0].values[0][0]).toBe(0);
   });

@@ -73,6 +73,13 @@ int sqlite3_track_write_get(
   int *pQueryIndex
 );
 
+/* For op='U' writes, returns a comma-separated list of the column names
+** the SQL UPDATE actually assigned to (from the SET clause). Returns
+** NULL for ops where column granularity does not apply ('I','D','T')
+** or if the tracker did not capture the column list (older compile
+** paths). The returned pointer is owned by the tracker. */
+const char *sqlite3_track_write_columns(sqlite3 *db, int i);
+
 /* ----- Predicate log ---------------------------------------------------
 ** Predicate (range-read) events let a rw-dependency consumer detect
 ** phantom conflicts that point-read tracking misses: a concurrent insert

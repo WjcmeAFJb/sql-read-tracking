@@ -123,6 +123,7 @@ Module["onRuntimeInitialized"] = function onRuntimeInitialized() {
   var _track_read_get = cwrap("sqlite3_track_read_get", "number", [ "number", "number", "number", "number", "number" ]);
   var _track_write_count = cwrap("sqlite3_track_write_count", "number", [ "number" ]);
   var _track_write_get = cwrap("sqlite3_track_write_get", "number", [ "number", "number", "number", "number", "number", "number" ]);
+  var _track_write_cols = cwrap("sqlite3_track_write_columns", "string", [ "number", "number" ]);
   var _track_pred_count = cwrap("sqlite3_track_predicate_count", "number", [ "number" ]);
   var _track_pred_get = cwrap("sqlite3_track_predicate_get", "number", [ "number", "number", "number", "number", "number", "number", "number", "number" ]);
   var _track_idxw_count = cwrap("sqlite3_track_idxwrite_count", "number", [ "number" ]);
@@ -416,11 +417,14 @@ Module["onRuntimeInitialized"] = function onRuntimeInitialized() {
         /* op is stored as a single char; pOp points at the low byte. */ var opCode = HEAPU8[pOp];
         var op = opCode === 73 ? "insert" : opCode === 85 ? "update" : opCode === 68 ? "delete" : opCode === 84 ? "truncate" : String.fromCharCode(opCode);
         var q = getValue(pQ, "i32");
+        var colsCsv = op === "update" ? _track_write_cols(this.ptr, i) : null;
+        var columns = colsCsv ? colsCsv.split(",") : null;
         out[i] = {
           table: tbl,
           rowid,
           op,
-          query: q
+          query: q,
+          columns
         };
       }
     } finally {
@@ -4371,7 +4375,7 @@ Module["lengthBytesUTF8"] = lengthBytesUTF8;
 // End JS library exports
 // end include: postlibrary.js
 // Imports from the Wasm binary.
-var _sqlite3_free, _sqlite3_step, _sqlite3_column_int64, _sqlite3_reset, _sqlite3_exec, _sqlite3_column_int, _sqlite3_finalize, _sqlite3_prepare_v2, _sqlite3_column_text, _sqlite3_errmsg, _sqlite3_clear_bindings, _sqlite3_column_count, _sqlite3_data_count, _sqlite3_column_blob, _sqlite3_column_bytes, _sqlite3_column_double, _sqlite3_column_type, _sqlite3_column_name, _sqlite3_bind_blob, _sqlite3_bind_double, _sqlite3_bind_int, _sqlite3_bind_int64, _sqlite3_bind_null, _sqlite3_bind_text, _sqlite3_bind_parameter_count, _sqlite3_bind_parameter_name, _sqlite3_bind_parameter_index, _sqlite3_sql, _sqlite3_last_insert_rowid, _sqlite3_changes, _sqlite3_close_v2, _sqlite3_errcode, _sqlite3_open, _sqlite3_get_autocommit, _malloc, _free, _sqlite3_track_begin, _sqlite3_track_end, _sqlite3_track_reset, _sqlite3_track_is_enabled, _sqlite3_track_read_count, _sqlite3_track_read_get, _sqlite3_track_write_count, _sqlite3_track_write_get, _sqlite3_track_predicate_count, _sqlite3_track_predicate_get, _sqlite3_track_idxwrite_count, _sqlite3_track_idxwrite_get, _sqlite3_track_query_count, _sqlite3_track_query_sql, _sqlite3_track_query_rows_json, _sqlite3_track_dump_json, _emscripten_builtin_memalign, __emscripten_stack_restore, __emscripten_stack_alloc, _emscripten_stack_get_current, memory, __indirect_function_table, wasmMemory;
+var _sqlite3_free, _sqlite3_step, _sqlite3_column_int64, _sqlite3_reset, _sqlite3_exec, _sqlite3_column_int, _sqlite3_finalize, _sqlite3_prepare_v2, _sqlite3_column_text, _sqlite3_errmsg, _sqlite3_clear_bindings, _sqlite3_column_count, _sqlite3_data_count, _sqlite3_column_blob, _sqlite3_column_bytes, _sqlite3_column_double, _sqlite3_column_type, _sqlite3_column_name, _sqlite3_bind_blob, _sqlite3_bind_double, _sqlite3_bind_int, _sqlite3_bind_int64, _sqlite3_bind_null, _sqlite3_bind_text, _sqlite3_bind_parameter_count, _sqlite3_bind_parameter_name, _sqlite3_bind_parameter_index, _sqlite3_sql, _sqlite3_last_insert_rowid, _sqlite3_changes, _sqlite3_close_v2, _sqlite3_errcode, _sqlite3_open, _sqlite3_get_autocommit, _malloc, _free, _sqlite3_track_begin, _sqlite3_track_end, _sqlite3_track_reset, _sqlite3_track_is_enabled, _sqlite3_track_read_count, _sqlite3_track_read_get, _sqlite3_track_write_count, _sqlite3_track_write_get, _sqlite3_track_write_columns, _sqlite3_track_predicate_count, _sqlite3_track_predicate_get, _sqlite3_track_idxwrite_count, _sqlite3_track_idxwrite_get, _sqlite3_track_query_count, _sqlite3_track_query_sql, _sqlite3_track_query_rows_json, _sqlite3_track_dump_json, _emscripten_builtin_memalign, __emscripten_stack_restore, __emscripten_stack_alloc, _emscripten_stack_get_current, memory, __indirect_function_table, wasmMemory;
 
 function assignWasmExports(wasmExports) {
   _sqlite3_free = Module["_sqlite3_free"] = wasmExports["sqlite3_free"];
@@ -4418,6 +4422,7 @@ function assignWasmExports(wasmExports) {
   _sqlite3_track_read_get = Module["_sqlite3_track_read_get"] = wasmExports["sqlite3_track_read_get"];
   _sqlite3_track_write_count = Module["_sqlite3_track_write_count"] = wasmExports["sqlite3_track_write_count"];
   _sqlite3_track_write_get = Module["_sqlite3_track_write_get"] = wasmExports["sqlite3_track_write_get"];
+  _sqlite3_track_write_columns = Module["_sqlite3_track_write_columns"] = wasmExports["sqlite3_track_write_columns"];
   _sqlite3_track_predicate_count = Module["_sqlite3_track_predicate_count"] = wasmExports["sqlite3_track_predicate_count"];
   _sqlite3_track_predicate_get = Module["_sqlite3_track_predicate_get"] = wasmExports["sqlite3_track_predicate_get"];
   _sqlite3_track_idxwrite_count = Module["_sqlite3_track_idxwrite_count"] = wasmExports["sqlite3_track_idxwrite_count"];

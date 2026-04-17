@@ -44,6 +44,8 @@ typedef struct TrackWrite {
   sqlite3_int64 rowid;      /* -1 for whole-table TRUNCATE */
   int iQuery;
   char op;                  /* 'I' | 'U' | 'D' | 'T' */
+  char *zColsCsv;           /* owned. Comma-separated column names for
+                             ** 'U' (UPDATE); NULL otherwise. */
 } TrackWrite;
 
 typedef struct TrackPred {
@@ -239,6 +241,7 @@ static void trackFreeState(void *pArg){
   for(int i=0; i<ts->nQuery; i++) trackFreeQuery(&ts->aQuery[i]);
   free(ts->aQuery);
   free(ts->aRead);
+  for(int i=0; i<ts->nWrite; i++) free(ts->aWrite[i].zColsCsv);
   free(ts->aWrite);
   for(int i=0; i<ts->nPred; i++) free(ts->aPred[i].zKeyJson);
   free(ts->aPred);
@@ -281,6 +284,7 @@ static void resetCollected(TrackState *ts){
   for(int i=0; i<ts->nQuery; i++) trackFreeQuery(&ts->aQuery[i]);
   free(ts->aQuery); ts->aQuery=NULL; ts->nQuery=0; ts->nQueryAlloc=0;
   free(ts->aRead); ts->aRead=NULL; ts->nRead=0; ts->nReadAlloc=0;
+  for(int i=0; i<ts->nWrite; i++) free(ts->aWrite[i].zColsCsv);
   free(ts->aWrite); ts->aWrite=NULL; ts->nWrite=0; ts->nWriteAlloc=0;
   for(int i=0; i<ts->nPred; i++) free(ts->aPred[i].zKeyJson);
   free(ts->aPred); ts->aPred=NULL; ts->nPred=0; ts->nPredAlloc=0;
@@ -351,6 +355,12 @@ int sqlite3_track_write_get(
   if( pOp )        *pOp = ts->aWrite[i].op;
   if( pQueryIndex) *pQueryIndex = ts->aWrite[i].iQuery;
   return 1;
+}
+
+const char *sqlite3_track_write_columns(sqlite3 *db, int i){
+  TrackState *ts = sqlite3TrackOfDb(db);
+  if( !ts || i<0 || i>=ts->nWrite ) return NULL;
+  return ts->aWrite[i].zColsCsv;
 }
 
 int sqlite3_track_predicate_count(sqlite3 *db){
@@ -447,6 +457,10 @@ const char *sqlite3_track_dump_json(sqlite3 *db){
     if( appendChar(&buf,&n,&nAlloc, ts->aWrite[i].op) ) goto oom;
     if( appendStr(&buf,&n,&nAlloc, "\",\"query\":", -1) ) goto oom;
     if( appendI64(&buf,&n,&nAlloc, ts->aWrite[i].iQuery) ) goto oom;
+    if( ts->aWrite[i].zColsCsv ){
+      if( appendStr(&buf,&n,&nAlloc, ",\"columns\":", -1) ) goto oom;
+      if( appendJsonString(&buf,&n,&nAlloc, ts->aWrite[i].zColsCsv, -1) ) goto oom;
+    }
     if( appendChar(&buf,&n,&nAlloc, '}') ) goto oom;
   }
   if( appendStr(&buf,&n,&nAlloc, "],\"queries\":[", -1) ) goto oom;
@@ -657,14 +671,10 @@ void sqlite3TrackIndexWrite(
   e->op       = op;
 }
 
-void sqlite3TrackCursorWrite(
-  TrackState *ts,
-  int iQuery,
-  sqlite3 *db,
-  int iDb,
-  unsigned int pgnoRoot,
-  sqlite3_int64 rowid,
-  char op
+void sqlite3TrackCursorWriteCols(
+  TrackState *ts, int iQuery, sqlite3 *db,
+  int iDb, unsigned int pgnoRoot, sqlite3_int64 rowid, char op,
+  const char *zColsCsv
 ){
   if( !sqlite3TrackActive(ts) ) return;
   if( pgnoRoot==0 ) return;
@@ -677,9 +687,26 @@ void sqlite3TrackCursorWrite(
     ts->aWrite = p;
     ts->nWriteAlloc = n;
   }
+  char *zCopy = NULL;
+  if( zColsCsv && *zColsCsv ){
+    size_t n = strlen(zColsCsv);
+    zCopy = (char*)malloc(n+1);
+    if( zCopy ) memcpy(zCopy, zColsCsv, n+1);
+  }
   TrackWrite *w = &ts->aWrite[ts->nWrite++];
-  w->zTable = zName;
-  w->rowid  = (op==SQLITE_TRACK_OP_TRUNCATE) ? -1 : rowid;
-  w->iQuery = iQuery;
-  w->op     = op;
+  w->zTable   = zName;
+  w->rowid    = (op==SQLITE_TRACK_OP_TRUNCATE) ? -1 : rowid;
+  w->iQuery   = iQuery;
+  w->op       = op;
+  w->zColsCsv = zCopy;
+}
+
+/* Back-compat thin wrapper: callers that don't supply columns (OP_Delete,
+** OP_Clear, plain OP_Insert) get a NULL column list. Defined AFTER
+** sqlite3TrackCursorWriteCols so clang sees the prototype. */
+void sqlite3TrackCursorWrite(
+  TrackState *ts, int iQuery, sqlite3 *db,
+  int iDb, unsigned int pgnoRoot, sqlite3_int64 rowid, char op
+){
+  sqlite3TrackCursorWriteCols(ts, iQuery, db, iDb, pgnoRoot, rowid, op, NULL);
 }

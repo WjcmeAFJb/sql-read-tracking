@@ -114,6 +114,29 @@ function keyInRange(writeKey, range) {
 function conflictReasons(a, b) {
   const reasons = [];
 
+  /* Pre-compute the set of (table, rowid) pairs where both txs do
+   * column-disjoint UPDATEs. Those pairs commute -- physically both
+   * rewrite the whole row, so the row-level tracker flags rw+ww, but
+   * semantically each side preserves the other's columns on rewrite
+   * and the final state is the same regardless of order. We suppress
+   * edges on those rows so the cluster graph doesn't merge them. The
+   * suppression assumes SET expressions don't cross-reference (i.e.
+   * neither side's SET formula reads a column the other side writes);
+   * that is the common case for independent column updates. */
+  const commuting = new Set();
+  for (const wa of a.writes) {
+    if (wa.op !== "update" || !wa.columns) continue;
+    for (const wb of b.writes) {
+      if (wb.op !== "update" || !wb.columns) continue;
+      if (wa.table !== wb.table || wa.rowid !== wb.rowid) continue;
+      const sa = new Set(wa.columns);
+      if (!wb.columns.some(c => sa.has(c))) {
+        commuting.add(`${wa.table}:${wa.rowid}`);
+      }
+    }
+  }
+  const isCommuting = (table, rowid) => commuting.has(`${table}:${rowid}`);
+
   const pointRW = (reader, writer) => {
     for (const w of writer.writes) {
       if (w.op === "truncate") {
@@ -123,6 +146,7 @@ function conflictReasons(a, b) {
           `${writer.label} truncated ${w.table}`
         );
       } else {
+        if (isCommuting(w.table, w.rowid)) continue;
         const hit = reader.reads.find(
           r => r.table === w.table && r.rowid === w.rowid
         );
@@ -136,18 +160,37 @@ function conflictReasons(a, b) {
   pointRW(a, b);
   pointRW(b, a);
 
+  /* ww conflict: same table AND same rowid AND overlapping column sets.
+   * Two UPDATEs on the same row that touch disjoint columns commute,
+   * so we suppress the ww edge in that case. Insert/delete/truncate
+   * affect the whole row and thus conflict with any column set. */
   for (const wa of a.writes) {
     for (const wb of b.writes) {
       if (wa.table !== wb.table) continue;
-      const overlap =
+      const rowOverlap =
         wa.op === "truncate" || wb.op === "truncate" || wa.rowid === wb.rowid;
-      if (overlap) {
+      if (!rowOverlap) continue;
+
+      /* If both are updates with known column sets, require column overlap. */
+      if (wa.op === "update" && wb.op === "update"
+          && wa.columns && wb.columns) {
+        const sa = new Set(wa.columns);
+        const shared = wb.columns.filter(c => sa.has(c));
+        if (shared.length === 0) continue;
         reasons.push(
-          `ww: ${a.label} ${wa.op} ${wa.table}:${wa.rowid}; ` +
-          `${b.label} ${wb.op} ${wb.table}:${wb.rowid}`
+          `ww: ${a.label} UPDATE ${wa.table}:${wa.rowid} cols=[${wa.columns.join(",")}]; ` +
+          `${b.label} UPDATE ${wb.table}:${wb.rowid} cols=[${wb.columns.join(",")}] ` +
+          `-- shared columns: {${shared.join(",")}}`
         );
-        break;
+      } else {
+        const colsA = wa.columns ? ` cols=[${wa.columns.join(",")}]` : "";
+        const colsB = wb.columns ? ` cols=[${wb.columns.join(",")}]` : "";
+        reasons.push(
+          `ww: ${a.label} ${wa.op} ${wa.table}:${wa.rowid}${colsA}; ` +
+          `${b.label} ${wb.op} ${wb.table}:${wb.rowid}${colsB}`
+        );
       }
+      break;
     }
   }
 
@@ -324,12 +367,20 @@ const simpleA = [
   { sql: "UPDATE users SET age=age+1 WHERE id=3" },
 ];
 
-/* Branch B: the "feature" branch -- also three operations. Some pairs
- * collide with branch A; the demo will find them. */
+/* Branch B: the "feature" branch. Four operations. Two of them touch
+ * the same users row as branch A, but one of those only touches a
+ * disjoint column (no conflict) and one touches the same column (real
+ * conflict). The column-level write tracking is what lets us tell
+ * those apart. */
 const simpleB = [
-  { sql: "UPDATE users SET age=25 WHERE id=1" },     // <- conflicts with A1
+  /* B1 touches users.1 but only the 'age' column -- column-disjoint
+   * from A1's 'name' UPDATE, so these commute. */
+  { sql: "UPDATE users SET age=25 WHERE id=1" },
   { sql: "INSERT INTO posts VALUES(50, 2, 'new')" },
-  { sql: "SELECT body FROM posts WHERE user_id=3" }, // <- conflicts with A2 (phantom? no -- A2 deletes id=11 which is user_id=2) + A3 (reads user 3 writes)
+  { sql: "SELECT body FROM posts WHERE user_id=3" },
+  /* B4 touches users.1 'name' column -- same column as A1. Genuine ww
+   * conflict; must serialise. */
+  { sql: "UPDATE users SET name='Alicia' WHERE id=1" },
 ];
 
 const simpleResult = report(
