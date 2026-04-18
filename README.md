@@ -141,7 +141,7 @@ The shipping build only requires `emcc`; the source tree also supports
 a Node-hosted test binary for fast iteration.
 
 ```bash
-# Build the npm-ready artifact (-> dist/sqlite3-tracked.{js,wasm,d.ts})
+# Build the npm-ready artifact (-> dist/sqlite3-tracked.{mjs,wasm,d.mts})
 npm run build
 
 # Build + run the C-level test harness

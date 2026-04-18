@@ -43,12 +43,15 @@ echo "[2/3] Compiling track.c ..."
 "$EMCC" "${CFLAGS[@]}" -c src/track.c -o build/track.o
 
 echo "[3/3] Linking native test binary (wasm/node target) ..."
+# Emcc's generated loader is CommonJS (uses `require()`). The package
+# now declares "type": "module" for the ESM dist, so we emit the test
+# harness with a `.cjs` extension so Node treats it as CJS regardless.
 "$EMCC" "${CFLAGS[@]}" \
   -sENVIRONMENT=node \
   -sALLOW_MEMORY_GROWTH=1 \
   -sEXIT_RUNTIME=1 \
   tests/native_main.c build/sqlite3.o build/track.o \
-  -o build/tests.js
+  -o build/tests.cjs
 
 echo
-echo "Built build/tests.js  (run: node build/tests.js)"
+echo "Built build/tests.cjs  (run: node build/tests.cjs)"

@@ -4,7 +4,7 @@
  * blob round-tripping.
  */
 import { describe, test, expect, beforeAll, beforeEach, afterEach } from "vitest";
-import initSqliteTracked from "../../dist/sqlite3-tracked.js";
+import initSqliteTracked from "../../dist/sqlite3-tracked.mjs";
 
 /* Collapse to distinct (table, rowid) pairs -- tests here usually care
  * about which rows were visited, not which specific columns. */

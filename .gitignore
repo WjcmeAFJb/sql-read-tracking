@@ -2,3 +2,8 @@ build/
 node_modules/
 package-lock.json
 *.log
+# The Vite demo is a user-facing example; its own build output and
+# installed deps should not be committed.
+examples/vite-app/node_modules/
+examples/vite-app/dist/
+examples/vite-app/package-lock.json

@@ -28,7 +28,7 @@
  *      classified as A-only, B-only, or MIXED based on which
  *      branches' txs it contains.
  */
-import initSqliteTracked from "../dist/sqlite3-tracked.js";
+import initSqliteTracked from "../dist/sqlite3-tracked.mjs";
 
 const SQL = await initSqliteTracked();
 

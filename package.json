@@ -13,20 +13,22 @@
   ],
   "license": "MIT",
   "author": "Read Tracker <tracker@example.invalid>",
-  "main": "dist/sqlite3-tracked.js",
+  "type": "module",
+  "main": "dist/sqlite3-tracked.mjs",
+  "module": "dist/sqlite3-tracked.mjs",
   "types": "dist/sqlite3-tracked.d.ts",
   "exports": {
     ".": {
-      "types": "./dist/sqlite3-tracked.d.ts",
-      "require": "./dist/sqlite3-tracked.js",
-      "import": "./dist/sqlite3-tracked.js",
-      "default": "./dist/sqlite3-tracked.js"
+      "types": "./dist/sqlite3-tracked.d.mts",
+      "import": "./dist/sqlite3-tracked.mjs",
+      "default": "./dist/sqlite3-tracked.mjs"
     },
     "./wasm": "./dist/sqlite3-tracked.wasm"
   },
   "files": [
-    "dist/sqlite3-tracked.js",
+    "dist/sqlite3-tracked.mjs",
     "dist/sqlite3-tracked.wasm",
+    "dist/sqlite3-tracked.d.mts",
     "dist/sqlite3-tracked.d.ts",
     "README.md",
     "LICENSE"
@@ -34,14 +36,18 @@
   "scripts": {
     "build": "bash scripts/build-wasm.sh",
     "build:test": "bash scripts/build-test.sh",
-    "test:native": "node build/tests.js",
+    "test:native": "node build/tests.cjs",
     "test:e2e": "vitest run",
     "test:e2e:watch": "vitest",
-    "test": "bash scripts/build-test.sh && node build/tests.js && npm run build && vitest run",
+    "test:browser": "vitest run --config vitest.browser.config.mjs",
+    "test:browser:watch": "vitest --config vitest.browser.config.mjs",
+    "test": "bash scripts/build-test.sh && node build/tests.cjs && npm run build && vitest run && npm run test:browser",
     "demo": "node examples/cluster-demo.mjs",
     "prepublishOnly": "bash scripts/build-wasm.sh"
   },
   "devDependencies": {
+    "@vitest/browser": "^1.6.1",
+    "playwright": "^1.59.1",
     "vitest": "^1.6.0"
   },
   "engines": {

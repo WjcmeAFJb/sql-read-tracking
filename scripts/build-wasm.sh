@@ -51,23 +51,28 @@ fi
 echo "[2/3] Compile track.c -> build/track.o"
 "$EMCC" "${CFLAGS[@]}" -c src/track.c -o build/track.o
 
-echo "[3/3] Link dist/sqlite3-tracked.js"
+echo "[3/3] Link dist/sqlite3-tracked.mjs (ESM; Vite / vitest-browser friendly)"
 "$EMCC" "${CFLAGS[@]}" \
   -sENVIRONMENT=node,web,worker \
   -sALLOW_MEMORY_GROWTH=1 \
   -sEXIT_RUNTIME=0 \
   -sMODULARIZE=1 \
-  -sEXPORT_ES6=0 \
+  -sEXPORT_ES6=1 \
   -sEXPORT_NAME=initSqliteTracked \
   -sSTACK_SIZE=5MB \
   -sEXPORTED_FUNCTIONS=@src/bindings/exported_functions.json \
   -sEXPORTED_RUNTIME_METHODS=@src/bindings/exported_runtime_methods.json \
   --pre-js src/bindings/api.js \
   build/sqlite3.o build/track.o \
-  -o dist/sqlite3-tracked.js
+  -o dist/sqlite3-tracked.mjs
 
+cp src/bindings/sqlite3-tracked.d.ts dist/sqlite3-tracked.d.mts
+# Keep a .d.ts alias so TypeScript pre-nodeNext consumers resolve types
+# regardless of which extension they import.
 cp src/bindings/sqlite3-tracked.d.ts dist/sqlite3-tracked.d.ts
+# Drop the old CJS artifact if a previous build produced it.
+rm -f dist/sqlite3-tracked.js
 
 ls -la dist/
 echo
-echo "Built dist/sqlite3-tracked.js (+ .wasm, + .d.ts)."
+echo "Built dist/sqlite3-tracked.mjs (+ .wasm, + .d.mts)."

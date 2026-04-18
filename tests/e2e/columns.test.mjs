@@ -6,7 +6,7 @@
  * column sets apart, even when they both write the same row.
  */
 import { describe, test, expect, beforeAll, beforeEach, afterEach } from "vitest";
-import initSqliteTracked from "../../dist/sqlite3-tracked.js";
+import initSqliteTracked from "../../dist/sqlite3-tracked.mjs";
 
 let SQL;
 beforeAll(async () => { SQL = await initSqliteTracked(); });

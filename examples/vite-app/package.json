@@ -1,0 +1,17 @@
+{
+  "name": "sqlite3-read-tracking-vite-demo",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "sqlite3-read-tracking": "file:../.."
+  },
+  "devDependencies": {
+    "vite": "^5.4.0"
+  }
+}

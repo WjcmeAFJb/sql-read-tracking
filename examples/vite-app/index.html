@@ -1,0 +1,39 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>sqlite3-read-tracking / Vite demo</title>
+    <style>
+      body { font: 14px/1.4 system-ui, sans-serif; max-width: 900px; margin: 2em auto; }
+      pre  { background: #f6f6f6; padding: 0.6em 1em; overflow-x: auto; }
+      h2   { margin-top: 1.8em; }
+      label { display: block; font-weight: 600; margin-bottom: 0.3em; }
+      textarea { width: 100%; font: 13px/1.4 ui-monospace, monospace; }
+      button { padding: 0.4em 1em; font-size: 14px; }
+    </style>
+  </head>
+  <body>
+    <h1>SQLite read-tracking in the browser</h1>
+    <p>
+      The WASM module is loaded via a plain
+      <code>import initSqliteTracked from 'sqlite3-read-tracking'</code>;
+      Vite serves the <code>.wasm</code> as a sibling asset.
+    </p>
+
+    <label for="sql">SQL to execute (each run is tracked fresh):</label>
+    <textarea id="sql" rows="6">
+UPDATE users SET age = age + 1 WHERE id = 1;
+SELECT name FROM users WHERE age > 30;
+    </textarea>
+    <p><button id="run">run with tracking</button></p>
+
+    <h2>read log</h2>
+    <pre id="reads">—</pre>
+    <h2>write log</h2>
+    <pre id="writes">—</pre>
+    <h2>query log</h2>
+    <pre id="queries">—</pre>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

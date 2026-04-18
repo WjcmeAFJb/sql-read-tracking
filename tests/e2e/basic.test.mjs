@@ -8,7 +8,7 @@
  * survive the emscripten link step.
  */
 import { describe, test, expect, beforeAll, beforeEach, afterEach } from "vitest";
-import initSqliteTracked from "../../dist/sqlite3-tracked.js";
+import initSqliteTracked from "../../dist/sqlite3-tracked.mjs";
 
 /** Collapse a read log to distinct (table, rowid) pairs, dropping the
  *  per-column granularity. Handy for tests that care about which rows

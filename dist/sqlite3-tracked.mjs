@@ -1,15 +1,10 @@
 // This code implements the `-sMODULARIZE` settings by taking the generated
 // JS program code (INNER_JS_CODE) and wrapping it in a factory function.
 
-// Single threaded MINIMAL_RUNTIME programs do not need access to
-// document.currentScript, so a simple export declaration is enough.
-var initSqliteTracked = (() => {
-  // When MODULARIZE this JS may be executed later,
-  // after document.currentScript is gone, so we save it.
-  // In EXPORT_ES6 mode we can just use 'import.meta.url'.
-  var _scriptName = globalThis.document?.currentScript?.src;
-  return async function(moduleArg = {}) {
-    var moduleRtn;
+// When targeting node and ES6 we use `await import ..` in the generated code
+// so the outer function needs to be marked as async.
+async function initSqliteTracked(moduleArg = {}) {
+  var moduleRtn;
 
 // include: shell.js
 // include: minimum_runtime_check.js
@@ -39,6 +34,13 @@ var ENVIRONMENT_IS_WORKER = !!globalThis.WorkerGlobalScope;
 // N.b. Electron.js environment is simultaneously a NODE-environment, but
 // also a web environment.
 var ENVIRONMENT_IS_NODE = globalThis.process?.versions?.node && globalThis.process?.type != "renderer";
+
+if (ENVIRONMENT_IS_NODE) {
+  // When building an ES module `require` is not normally available.
+  // We need to use `createRequire()` to construct the require()` function.
+  const {createRequire} = await import("node:module");
+  /** @suppress{duplicate} */ var require = createRequire(import.meta.url);
+}
 
 // --pre-jses are emitted after the Module integration code, so that they can
 // refer to Module (if they choose; they can also define Module)
@@ -558,12 +560,7 @@ var quit_ = (status, toThrow) => {
   throw toThrow;
 };
 
-if (typeof __filename != "undefined") {
-  // Node
-  _scriptName = __filename;
-} else if (ENVIRONMENT_IS_WORKER) {
-  _scriptName = self.location.href;
-}
+var _scriptName = import.meta.url;
 
 // `/` should be present at the end if `scriptDirectory` is not empty
 var scriptDirectory = "";
@@ -582,7 +579,9 @@ if (ENVIRONMENT_IS_NODE) {
   // These modules will usually be used on Node.js. Load them eagerly to avoid
   // the complexity of lazy-loading.
   var fs = require("node:fs");
-  scriptDirectory = __dirname + "/";
+  if (_scriptName.startsWith("file:")) {
+    scriptDirectory = require("node:path").dirname(require("node:url").fileURLToPath(_scriptName)) + "/";
+  }
   // include: node_shell_read.js
   readBinary = filename => {
     // We need to re-wrap `file://` strings to URLs.
@@ -766,7 +765,11 @@ function postRun() {
 var wasmBinaryFile;
 
 function findWasmBinary() {
-  return locateFile("sqlite3-tracked.wasm");
+  if (Module["locateFile"]) {
+    return locateFile("sqlite3-tracked.wasm");
+  }
+  // Use bundler-friendly `new URL(..., import.meta.url)` pattern; works in browsers too.
+  return new URL("sqlite3-tracked.wasm", import.meta.url).href;
 }
 
 function getBinarySync(file) {
@@ -4541,16 +4544,9 @@ if (runtimeInitialized) {
 }
 
 
-    return moduleRtn;
-  };
-})();
+  return moduleRtn;
+}
 
 // Export using a UMD style export, or ES6 exports if selected
-if (typeof exports === 'object' && typeof module === 'object') {
-  module.exports = initSqliteTracked;
-  // This default export looks redundant, but it allows TS to import this
-  // commonjs style module.
-  module.exports.default = initSqliteTracked;
-} else if (typeof define === 'function' && define['amd'])
-  define([], () => initSqliteTracked);
+export default initSqliteTracked;
 
