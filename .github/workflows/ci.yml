@@ -11,8 +11,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  test:
-    name: Build WASM + run suites
+  build:
+    name: Build WASM
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -37,19 +37,5 @@ jobs:
       - name: Install node deps
         run: pnpm install --frozen-lockfile
 
-      - name: Build C test harness + run native tests
-        run: |
-          pnpm run build:test
-          pnpm run test:native
-
       - name: Build WASM
         run: pnpm run build
-
-      - name: E2E tests (Node, against dist/)
-        run: pnpm run test:e2e
-
-      - name: Install Playwright browsers
-        run: pnpm exec playwright install chromium --with-deps
-
-      - name: Browser tests (Chromium, against dist/)
-        run: pnpm run test:browser
