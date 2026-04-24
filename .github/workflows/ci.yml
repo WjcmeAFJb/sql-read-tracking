@@ -1,0 +1,55 @@
+name: ci
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Build WASM + run suites
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "pnpm"
+
+      # Emscripten — the WASM build needs the full SDK.
+      - name: Install emscripten
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: "3.1.62"
+          actions-cache-folder: "emsdk-cache"
+
+      - name: Install node deps
+        run: pnpm install --frozen-lockfile
+
+      - name: Build C test harness + run native tests
+        run: |
+          pnpm run build:test
+          pnpm run test:native
+
+      - name: Build WASM
+        run: pnpm run build
+
+      - name: E2E tests (Node, against dist/)
+        run: pnpm run test:e2e
+
+      - name: Install Playwright browsers
+        run: pnpm exec playwright install chromium --with-deps
+
+      - name: Browser tests (Chromium, against dist/)
+        run: pnpm run test:browser

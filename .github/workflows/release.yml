@@ -1,0 +1,75 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build + publish tarball
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "pnpm"
+
+      - name: Install emscripten
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: "3.1.62"
+          actions-cache-folder: "emsdk-cache"
+
+      - name: Install node deps
+        run: pnpm install --frozen-lockfile
+
+      # `pnpm pack` doesn't run `prepublishOnly` (that's npm-only);
+      # build explicitly so the tarball always carries the fresh WASM.
+      - name: Build WASM + loader
+        run: pnpm run build
+
+      - name: Pack tarball
+        id: pack
+        run: |
+          mkdir -p dist-release
+          pnpm pack --pack-destination dist-release
+          TARBALL=$(ls dist-release/*.tgz | head -n1)
+          echo "tarball=$(basename "$TARBALL")" >> "$GITHUB_OUTPUT"
+          echo "Tarball: $TARBALL"
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist-release/*.tgz
+          generate_release_notes: true
+          body: |
+            Pre-built WASM + loader included in the tarball — consumers
+            don't need emscripten.
+
+            ## Install
+
+            ```bash
+            pnpm add 'https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/${{ steps.pack.outputs.tarball }}'
+            ```
+
+            ```ts
+            import initSqliteTracked from "sqlite3-read-tracking";
+            import wasmUrl from "sqlite3-read-tracking/wasm?url";
+
+            const SQL = await initSqliteTracked({ locateFile: () => wasmUrl });
+            ```

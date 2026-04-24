@@ -10,10 +10,41 @@ Built for change-data-capture, cache invalidation, replication audit, and
 any workload that needs to answer "which rows did this transaction look
 at, not just the ones it wrote?"
 
+This repo is a small fork of SQLite that adds tracking hooks; SQLite itself
+remains in the public domain. See [`LICENSE`](./LICENSE) for the tracking
+layer's terms.
+
+Companion libraries that use this:
+
+- [**sql-git**](https://github.com/WjcmeAFJb/sql-git) — distributed
+  SQLite with rebase-style conflict resolution; uses the read-set
+  tracking for fast-path convergence detection.
+- [**sql-reactive-orm**](https://github.com/WjcmeAFJb/sql-reactive-orm) —
+  reactive ORM for React + SQLite.
+
 ## Install
 
+Release tarballs are attached to every GitHub release:
+
 ```bash
-npm install sqlite3-read-tracking
+pnpm add 'https://github.com/WjcmeAFJb/sql-read-tracking/releases/download/v0.2.0/sqlite3-read-tracking-0.2.0.tgz'
+```
+
+Or via a git tag:
+
+```bash
+pnpm add 'github:WjcmeAFJb/sql-read-tracking#v0.2.0'
+```
+
+The package ships with the pre-built `dist/sqlite3-tracked.wasm` and the
+ESM loader, so consumers don't need emscripten. Bundlers such as Vite
+pick up the WASM automatically via the `./wasm` sub-export:
+
+```ts
+import initSqliteTracked from "sqlite3-read-tracking";
+import wasmUrl from "sqlite3-read-tracking/wasm?url";
+
+const SQL = await initSqliteTracked({ locateFile: () => wasmUrl });
 ```
 
 ## Quick start
@@ -151,6 +182,15 @@ npm run build:test && npm run test:native
 npm test
 ```
 
+The CI workflow (`.github/workflows/ci.yml`) does the same steps on
+every push: installs emscripten via `mymindstorm/setup-emsdk`, runs the
+native + E2E + browser suites. The release workflow
+(`.github/workflows/release.yml`) runs on tag pushes matching `v*` and
+publishes a tarball as a GitHub release asset.
+
 ## License
 
-MIT.
+SQLite itself — the contents of `vendor/sqlite3.{c,h}` — is in the
+public domain (see https://www.sqlite.org/copyright.html). The
+tracking layer added under `src/` is distributed under the terms of
+[`LICENSE`](./LICENSE) (MIT).
