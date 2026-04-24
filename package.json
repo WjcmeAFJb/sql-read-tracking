@@ -1,6 +1,6 @@
 {
   "name": "sqlite3-read-tracking",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "SQLite built to WASM with per-transaction read tracking: every (table, rowid) touched and every (SQL, rows) executed, including the cursor reads driven by mutative statements.",
   "keywords": [
     "sqlite",

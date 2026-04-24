@@ -27,13 +27,13 @@ Companion libraries that use this:
 Release tarballs are attached to every GitHub release:
 
 ```bash
-pnpm add 'https://github.com/WjcmeAFJb/sql-read-tracking/releases/download/v0.2.0/sqlite3-read-tracking-0.2.0.tgz'
+pnpm add 'https://github.com/WjcmeAFJb/sql-read-tracking/releases/download/v0.2.1/sqlite3-read-tracking-0.2.1.tgz'
 ```
 
 Or via a git tag:
 
 ```bash
-pnpm add 'github:WjcmeAFJb/sql-read-tracking#v0.2.0'
+pnpm add 'github:WjcmeAFJb/sql-read-tracking#v0.2.1'
 ```
 
 The package ships with the pre-built `dist/sqlite3-tracked.wasm` and the
